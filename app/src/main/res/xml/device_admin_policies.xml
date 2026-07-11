@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Deliberately minimal: we only need force-lock capability for lockNow().
+  Requesting fewer policies here means Android's system Device Admin
+  confirmation screen shows fewer scary bullet points to the user.
+-->
+<device-admin xmlns:android="http://schemas.android.com/apk/res/android">
+    <uses-policies>
+        <force-lock />
+    </uses-policies>
+</device-admin>

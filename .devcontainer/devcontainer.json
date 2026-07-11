@@ -1,0 +1,26 @@
+{
+  "name": "VoiceLock Android Dev",
+  "image": "mcr.microsoft.com/devcontainers/java:17",
+  "features": {
+    "ghcr.io/devcontainers/features/java:1": {
+      "version": "17",
+      "installGradle": true
+    }
+  },
+  "postCreateCommand": "bash .devcontainer/setup-android-sdk.sh",
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "vscjava.vscode-java-pack",
+        "redhat.vscode-yaml",
+        "adelphes.android-dev-ext",
+        "ms-vscode.cpptools"
+      ]
+    }
+  },
+  "remoteEnv": {
+    "ANDROID_HOME": "/home/vscode/android-sdk",
+    "ANDROID_SDK_ROOT": "/home/vscode/android-sdk"
+  },
+  "forwardPorts": []
+}
