@@ -1,0 +1,56 @@
+# --- Build outputs ---
+*.apk
+*.aab
+*.ap_
+*.dex
+build/
+app/build/
+out/
+
+# --- Gradle ---
+.gradle/
+gradle-app.setting
+!gradle/wrapper/gradle-wrapper.jar
+!gradle/wrapper/gradle-wrapper.properties
+gradlew.bat.log
+
+# --- Local machine/SDK config (never portable, never shared) ---
+local.properties
+
+# --- Android Studio / IntelliJ ---
+.idea/
+*.iml
+*.ipr
+*.iws
+.navigation/
+captures/
+.externalNativeBuild/
+.cxx/
+
+# --- VS Code / Codespaces ---
+.vscode/
+*.code-workspace
+
+# --- OS junk ---
+.DS_Store
+Thumbs.db
+
+# --- Logs ---
+*.log
+
+# --- Signing keys — NEVER commit these ---
+*.jks
+*.keystore
+keystore.properties
+
+# --- Test/coverage output ---
+*.class
+/captures
+.externalNativeBuild
+.cxx
+
+# --- Model files are large binaries pulled from openWakeWord's GitHub
+# releases by create_voicelock_project.sh (or manually) rather than
+# committed to source control. Uncomment if you'd rather vendor them
+# directly in git instead of re-downloading on setup:
+# app/src/main/assets/models/*.onnx
