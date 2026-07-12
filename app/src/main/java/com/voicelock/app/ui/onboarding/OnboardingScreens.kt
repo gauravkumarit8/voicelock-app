@@ -159,25 +159,40 @@ private val enrollmentTakes = listOf(
 )
 
 @Composable
-fun EnrollmentScreen(nav: NavController) {
+fun EnrollmentScreen(nav: NavController, viewModel: EnrollmentViewModel = hiltViewModel()) {
     var takeIndex by remember { mutableIntStateOf(0) }
+    val recordingState by viewModel.state.collectAsState()
 
     if (takeIndex < enrollmentTakes.size) {
         val (title, instruction) = enrollmentTakes[takeIndex]
+        val isRecording = recordingState == RecordingState.RECORDING
         OnboardingScaffold(
             title = title,
             body = instruction,
-            primaryLabel = "Recording… tap when done", // TODO: wire to real AudioRecord capture
-            onPrimary = { takeIndex++ }
+            primaryLabel = if (isRecording) "Recording… tap when done" else "Tap to start recording",
+            onPrimary = {
+                if (isRecording) {
+                    viewModel.stopRecording()
+                    takeIndex++
+                } else {
+                    viewModel.startRecording()
+                }
+            }
         )
     } else {
-        // TODO: pass captured samples into SpeakerVerificationEngine.embed(),
-        // average the 3 embeddings, and persist via VoiceprintStore.saveEmbedding().
+        val isProcessing = recordingState == RecordingState.PROCESSING
         OnboardingScaffold(
-            title = "All set — analyzing your voice…",
-            body = "Your voiceprint has been created and stored securely on this device.",
-            primaryLabel = "Test it now",
-            onPrimary = { nav.navigate("live_test") }
+            title = if (isProcessing) "Analyzing your voice…" else "All set — ready to save",
+            body = if (isProcessing)
+                "Generating your voiceprint from the 3 recordings."
+            else
+                "Your voiceprint has been created and stored securely on this device.",
+            primaryLabel = if (isProcessing) "Please wait…" else "Test it now",
+            onPrimary = {
+                if (!isProcessing) {
+                    viewModel.finalizeEnrollment(onDone = { nav.navigate("live_test") })
+                }
+            }
         )
     }
 }

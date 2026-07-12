@@ -6,21 +6,41 @@ product/architecture spec this code implements.
 
 ## Project status
 
-This is a **working scaffold**, not a finished app. Everything needed to
-compile, install, and walk through onboarding is here. Three things are
-intentionally left as marked `TODO`s because they're substantial, separately
-reviewable pieces of work:
+Real audio capture and the openWakeWord pipeline are now wired in — this is
+no longer a click-through shell. What actually works end-to-end:
 
-1. **Audio capture loop** in `WakeWordService` (AudioRecord → melspectrogram
-   features → `WakeWordEngine.detect()`).
-2. **Enrollment capture** in `EnrollmentScreen` (recording the 3 takes into
-   real audio buffers instead of a tap-through placeholder).
-3. **The two ONNX model files themselves** — see
-   `app/src/main/assets/models/README.md`.
+1. **Enrollment recording** (`EnrollmentViewModel` + `AudioCapture`) — real
+   `AudioRecord` capture for each of the 3 takes, embedded via
+   `SpeakerVerificationEngine`, averaged, and persisted encrypted.
+2. **Wake-word detection** (`WakeWordService` + `WakeWordEngine`) — the real
+   3-stage openWakeWord pipeline (melspectrogram → embedding → classifier),
+   running continuously over a live `AudioRecord` stream while the screen is on.
+3. **A real stock model is bundled** at `app/src/main/assets/models/` —
+   `melspectrogram.onnx`, `embedding_model.onnx` (shared preprocessing), and
+   `hey_jarvis_v0.1.onnx` (openWakeWord's pretrained "Hey Jarvis" phrase) —
+   pulled directly from openWakeWord's GitHub releases, so the pipeline is
+   testable with a real phrase before you train your own custom one.
 
-Everything else — permissions, manifest, Device Admin, the battery-exemption
-gatekeeping logic, OEM deep links, encrypted voiceprint storage, Hilt wiring,
-and the full onboarding screen flow — is implemented per the PRD.
+**What's still missing before this is a finished product:**
+
+- **`SpeakerVerificationEngine`'s model file is NOT bundled.** There's no
+  pretrained, permissively-licensed speaker-embedding ONNX file included —
+  you still need to source/convert one and place it at
+  `app/src/main/assets/models/speaker_embedding.onnx`, or enrollment/voice-auth
+  will throw a `FileNotFoundException` at runtime.
+- **Your actual custom phrase isn't trained yet** — the bundled classifier
+  detects "Hey Jarvis", not your chosen VoiceLock phrase. See "Training your
+  wake word model" below to swap it once you're ready.
+- **The melspectrogram/embedding windowing math in `WakeWordEngine` is
+  reconstructed from openWakeWord's public docs, not verified against a live
+  run of their reference implementation.** It should work, but if detection
+  accuracy seems off, that's the first place to check — see the caveat
+  comment directly in `WakeWordEngine.kt`.
+- The live "Test your setup" screen (`LiveTestScreen`) still doesn't call
+  `LockManager.lockNow()` or listen for a real detection callback — it's
+  cosmetic until wired up.
+- Settings screen is still a placeholder.
+
 
 ## Developing in GitHub Codespaces
 

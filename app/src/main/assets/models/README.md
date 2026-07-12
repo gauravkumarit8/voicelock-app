@@ -1,14 +1,18 @@
-# Model files go here
+# Model files
 
-This directory is intentionally empty in source control.
+`melspectrogram.onnx`, `embedding_model.onnx`, and `hey_jarvis_v0.1.onnx` are
+bundled here, pulled directly from openWakeWord's GitHub releases
+(https://github.com/dscripka/openWakeWord/releases/tag/v0.5.1). These let you
+test the full wake-word pipeline immediately using the stock "Hey Jarvis"
+phrase, before training your own custom phrase.
 
-Place your trained/converted ONNX models here before building:
-- `wakeword_phrase.onnx` — trained via the free openWakeWord + Piper-TTS
-  pipeline (see main README, "Training your wake word model").
-- `speaker_embedding.onnx` — a pretrained, permissively-licensed
-  (Apache/MIT) speaker-embedding model converted to ONNX.
+**Still missing:** `speaker_embedding.onnx` — no pretrained speaker-embedding
+model is bundled. Source or convert one (Apache/MIT-licensed) and place it
+here before enrollment/voice-auth will work — see the main README's
+"Speaker verification model" section.
 
-Without these two files, WakeWordEngine.loadModel() and
-SpeakerVerificationEngine.loadModel() will throw a FileNotFoundException
-at runtime — the app will still compile and install, but voice detection
-won't function until the models are added.
+To swap in your own trained wake-word phrase later: keep
+`melspectrogram.onnx` and `embedding_model.onnx` as-is (they're the shared
+preprocessing stages, reusable for any phrase), and replace only the
+classifier — update the `classifierAsset` default in
+`WakeWordEngine.loadModels()` to point at your new file.

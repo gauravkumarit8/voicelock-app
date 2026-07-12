@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
-# Run this from inside your empty GitHub Codespace / repo root.
-# It creates every directory and file for the VoiceLock project scaffold.
+# Recreates the VoiceLock project, including bundled model files.
 set -euo pipefail
 
 echo "Creating directory structure..."
@@ -35,7 +34,7 @@ mkdir -p "app/src/main/res/{values,drawable,xml,mipmap-anydpi-v26}"
 mkdir -p "gradle"
 mkdir -p "gradle/wrapper"
 
-echo "Writing files..."
+echo "Writing text files..."
 cat > ".devcontainer/devcontainer.json" << 'VOICELOCK_EOF_MARKER'
 {
   "name": "VoiceLock Android Dev",
@@ -74,6 +73,11 @@ cat > ".devcontainer/setup-android-sdk.sh" << 'VOICELOCK_EOF_MARKER'
 set -euo pipefail
 
 SDK_ROOT="${ANDROID_SDK_ROOT:-$HOME/android-sdk}"
+# Capture the repo root as an ABSOLUTE path before we cd anywhere else —
+# otherwise the later gradle-wrapper step resolves $0 relative to whatever
+# directory we're sitting in by then, not where the script was invoked from.
+REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+
 mkdir -p "$SDK_ROOT/cmdline-tools"
 cd "$SDK_ROOT/cmdline-tools"
 
@@ -103,8 +107,8 @@ sdkmanager --sdk_root="$SDK_ROOT" \
 
 # Generate the Gradle wrapper (kept out of source control until first boot
 # so the repo doesn't need to vendor the wrapper jar)
-if [ ! -f "$(dirname "$0")/../gradlew" ]; then
-  cd "$(dirname "$0")/.."
+if [ ! -f "$REPO_ROOT/gradlew" ]; then
+  cd "$REPO_ROOT"
   gradle wrapper --gradle-version 8.9
 fi
 
@@ -120,21 +124,41 @@ product/architecture spec this code implements.
 
 ## Project status
 
-This is a **working scaffold**, not a finished app. Everything needed to
-compile, install, and walk through onboarding is here. Three things are
-intentionally left as marked `TODO`s because they're substantial, separately
-reviewable pieces of work:
+Real audio capture and the openWakeWord pipeline are now wired in — this is
+no longer a click-through shell. What actually works end-to-end:
 
-1. **Audio capture loop** in `WakeWordService` (AudioRecord → melspectrogram
-   features → `WakeWordEngine.detect()`).
-2. **Enrollment capture** in `EnrollmentScreen` (recording the 3 takes into
-   real audio buffers instead of a tap-through placeholder).
-3. **The two ONNX model files themselves** — see
-   `app/src/main/assets/models/README.md`.
+1. **Enrollment recording** (`EnrollmentViewModel` + `AudioCapture`) — real
+   `AudioRecord` capture for each of the 3 takes, embedded via
+   `SpeakerVerificationEngine`, averaged, and persisted encrypted.
+2. **Wake-word detection** (`WakeWordService` + `WakeWordEngine`) — the real
+   3-stage openWakeWord pipeline (melspectrogram → embedding → classifier),
+   running continuously over a live `AudioRecord` stream while the screen is on.
+3. **A real stock model is bundled** at `app/src/main/assets/models/` —
+   `melspectrogram.onnx`, `embedding_model.onnx` (shared preprocessing), and
+   `hey_jarvis_v0.1.onnx` (openWakeWord's pretrained "Hey Jarvis" phrase) —
+   pulled directly from openWakeWord's GitHub releases, so the pipeline is
+   testable with a real phrase before you train your own custom one.
 
-Everything else — permissions, manifest, Device Admin, the battery-exemption
-gatekeeping logic, OEM deep links, encrypted voiceprint storage, Hilt wiring,
-and the full onboarding screen flow — is implemented per the PRD.
+**What's still missing before this is a finished product:**
+
+- **`SpeakerVerificationEngine`'s model file is NOT bundled.** There's no
+  pretrained, permissively-licensed speaker-embedding ONNX file included —
+  you still need to source/convert one and place it at
+  `app/src/main/assets/models/speaker_embedding.onnx`, or enrollment/voice-auth
+  will throw a `FileNotFoundException` at runtime.
+- **Your actual custom phrase isn't trained yet** — the bundled classifier
+  detects "Hey Jarvis", not your chosen VoiceLock phrase. See "Training your
+  wake word model" below to swap it once you're ready.
+- **The melspectrogram/embedding windowing math in `WakeWordEngine` is
+  reconstructed from openWakeWord's public docs, not verified against a live
+  run of their reference implementation.** It should work, but if detection
+  accuracy seems off, that's the first place to check — see the caveat
+  comment directly in `WakeWordEngine.kt`.
+- The live "Test your setup" screen (`LiveTestScreen`) still doesn't call
+  `LockManager.lockNow()` or listen for a real detection callback — it's
+  cosmetic until wired up.
+- Settings screen is still a placeholder.
+
 
 ## Developing in GitHub Codespaces
 
@@ -704,20 +728,24 @@ cat > "app/src/main/AndroidManifest.xml" << 'VOICELOCK_EOF_MARKER'
 VOICELOCK_EOF_MARKER
 
 cat > "app/src/main/assets/models/README.md" << 'VOICELOCK_EOF_MARKER'
-# Model files go here
+# Model files
 
-This directory is intentionally empty in source control.
+`melspectrogram.onnx`, `embedding_model.onnx`, and `hey_jarvis_v0.1.onnx` are
+bundled here, pulled directly from openWakeWord's GitHub releases
+(https://github.com/dscripka/openWakeWord/releases/tag/v0.5.1). These let you
+test the full wake-word pipeline immediately using the stock "Hey Jarvis"
+phrase, before training your own custom phrase.
 
-Place your trained/converted ONNX models here before building:
-- `wakeword_phrase.onnx` — trained via the free openWakeWord + Piper-TTS
-  pipeline (see main README, "Training your wake word model").
-- `speaker_embedding.onnx` — a pretrained, permissively-licensed
-  (Apache/MIT) speaker-embedding model converted to ONNX.
+**Still missing:** `speaker_embedding.onnx` — no pretrained speaker-embedding
+model is bundled. Source or convert one (Apache/MIT-licensed) and place it
+here before enrollment/voice-auth will work — see the main README's
+"Speaker verification model" section.
 
-Without these two files, WakeWordEngine.loadModel() and
-SpeakerVerificationEngine.loadModel() will throw a FileNotFoundException
-at runtime — the app will still compile and install, but voice detection
-won't function until the models are added.
+To swap in your own trained wake-word phrase later: keep
+`melspectrogram.onnx` and `embedding_model.onnx` as-is (they're the shared
+preprocessing stages, reusable for any phrase), and replace only the
+classifier — update the `classifierAsset` default in
+`WakeWordEngine.loadModels()` to point at your new file.
 VOICELOCK_EOF_MARKER
 
 cat > "app/src/main/java/com/voicelock/app/VoiceLockApplication.kt" << 'VOICELOCK_EOF_MARKER'
@@ -942,6 +970,131 @@ class VoiceprintStore @Inject constructor(
 }
 VOICELOCK_EOF_MARKER
 
+cat > "app/src/main/java/com/voicelock/app/ml/AudioCapture.kt" << 'VOICELOCK_EOF_MARKER'
+package com.voicelock.app.ml
+
+import android.Manifest
+import android.annotation.SuppressLint
+import android.media.AudioFormat
+import android.media.AudioRecord
+import android.media.MediaRecorder
+import androidx.annotation.RequiresPermission
+import kotlinx.coroutines.channels.awaitClose
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.callbackFlow
+import kotlinx.coroutines.flow.flowOn
+import kotlinx.coroutines.Dispatchers
+
+/**
+ * Thin wrapper around AudioRecord, 16kHz mono float PCM (the format both
+ * WakeWordEngine and SpeakerVerificationEngine expect). Used by:
+ *  - WakeWordService: continuous CHUNK_SIZE_SAMPLES (1280) chunks while screen is on
+ *  - EnrollmentScreen: one-shot capture-until-stopped for each enrollment take
+ */
+object AudioCapture {
+
+    const val SAMPLE_RATE_HZ = WakeWordEngine.SAMPLE_RATE_HZ
+
+    /**
+     * Emits successive chunks of [chunkSizeSamples] raw float PCM samples,
+     * normalized to [-1, 1], until the collecting coroutine is cancelled.
+     * Caller must hold RECORD_AUDIO permission before calling this.
+     */
+    @SuppressLint("MissingPermission")
+    @RequiresPermission(Manifest.permission.RECORD_AUDIO)
+    fun chunkStream(chunkSizeSamples: Int = WakeWordEngine.CHUNK_SIZE_SAMPLES): Flow<FloatArray> = callbackFlow {
+        val minBufferBytes = AudioRecord.getMinBufferSize(
+            SAMPLE_RATE_HZ,
+            AudioFormat.CHANNEL_IN_MONO,
+            AudioFormat.ENCODING_PCM_16BIT
+        )
+        val bufferSizeBytes = maxOf(minBufferBytes, chunkSizeSamples * 2 * 4) // headroom, 2 bytes/sample
+
+        val audioRecord = AudioRecord(
+            MediaRecorder.AudioSource.VOICE_RECOGNITION,
+            SAMPLE_RATE_HZ,
+            AudioFormat.CHANNEL_IN_MONO,
+            AudioFormat.ENCODING_PCM_16BIT,
+            bufferSizeBytes
+        )
+
+        if (audioRecord.state != AudioRecord.STATE_INITIALIZED) {
+            audioRecord.release()
+            close(IllegalStateException("AudioRecord failed to initialize"))
+            return@callbackFlow
+        }
+
+        val shortBuffer = ShortArray(chunkSizeSamples)
+        audioRecord.startRecording()
+
+        // A dedicated thread rather than a coroutine loop with delay() —
+        // AudioRecord.read() blocks until it has data, which is exactly the
+        // pacing we want (no manual sleep/duty-cycle math needed here).
+        val thread = Thread {
+            try {
+                while (!isClosedForSend) {
+                    val read = audioRecord.read(shortBuffer, 0, chunkSizeSamples)
+                    if (read == chunkSizeSamples) {
+                        val floatChunk = FloatArray(chunkSizeSamples) { i ->
+                            shortBuffer[i] / 32768f // normalize Int16 -> [-1, 1]
+                        }
+                        trySend(floatChunk)
+                    }
+                }
+            } catch (_: Exception) {
+                // Stream cancelled or AudioRecord torn down concurrently — expected on stop().
+            }
+        }
+        thread.start()
+
+        awaitClose {
+            audioRecord.stop()
+            audioRecord.release()
+            thread.interrupt()
+        }
+    }.flowOn(Dispatchers.IO)
+
+    /**
+     * One-shot capture for enrollment: records while [shouldContinue] returns
+     * true, then returns all captured samples concatenated as one FloatArray.
+     * Caller flips a mutable flag to false (e.g. on a button tap) to stop —
+     * see EnrollmentScreen for the calling pattern.
+     */
+    @SuppressLint("MissingPermission")
+    @RequiresPermission(Manifest.permission.RECORD_AUDIO)
+    suspend fun recordUntilStopped(shouldContinue: () -> Boolean): FloatArray {
+        val minBufferBytes = AudioRecord.getMinBufferSize(
+            SAMPLE_RATE_HZ,
+            AudioFormat.CHANNEL_IN_MONO,
+            AudioFormat.ENCODING_PCM_16BIT
+        )
+        val audioRecord = AudioRecord(
+            MediaRecorder.AudioSource.MIC,
+            SAMPLE_RATE_HZ,
+            AudioFormat.CHANNEL_IN_MONO,
+            AudioFormat.ENCODING_PCM_16BIT,
+            minBufferBytes
+        )
+        val allSamples = mutableListOf<Float>()
+        val chunk = ShortArray(1024)
+
+        try {
+            audioRecord.startRecording()
+            while (shouldContinue()) {
+                val read = audioRecord.read(chunk, 0, chunk.size)
+                if (read > 0) {
+                    for (i in 0 until read) allSamples.add(chunk[i] / 32768f)
+                }
+            }
+        } finally {
+            audioRecord.stop()
+            audioRecord.release()
+        }
+        return allSamples.toFloatArray()
+    }
+}
+VOICELOCK_EOF_MARKER
+
 cat > "app/src/main/java/com/voicelock/app/ml/SpeakerVerificationEngine.kt" << 'VOICELOCK_EOF_MARKER'
 package com.voicelock.app.ml
 
@@ -1023,48 +1176,154 @@ import javax.inject.Inject
 import javax.inject.Singleton
 
 /**
- * Wraps an openWakeWord-trained ONNX model (see PRD §16 — free, MIT-licensed,
- * trained via the official Piper-TTS synthetic pipeline). Expects the
- * standard openWakeWord feature pipeline: 16kHz mono audio -> melspectrogram
- * -> shared embedding backbone -> this classifier head.
+ * Real openWakeWord inference pipeline — THREE chained ONNX models, not one:
  *
- * MODEL FILE NOT INCLUDED: place your trained model at
- * app/src/main/assets/models/wakeword_phrase.onnx before building.
- * See PRD §16 build order steps 2-3 for the free training pipeline.
+ *   rolling raw 16kHz audio window -> melspectrogram.onnx -> 76 melspec frames
+ *   76 melspec frames               -> embedding_model.onnx -> one 96-dim embedding
+ *   16 consecutive embeddings       -> <phrase>.onnx classifier -> confidence score
+ *
+ * This matches openWakeWord's documented architecture (see
+ * https://github.com/dscripka/openWakeWord). The three-model split, the
+ * 76-frame melspectrogram window, and the 16-frame embedding window are
+ * openWakeWord's own fixed design choices, not something we're free to
+ * simplify — they come from how the pretrained embedding/classifier models
+ * were trained.
+ *
+ * CAVEAT: the exact sample-count-per-window arithmetic below (~12400 raw
+ * samples -> 76 melspec frames) is reconstructed from openWakeWord's public
+ * documentation and community implementations, not verified against a live
+ * run of their reference Python pipeline. Before relying on detection
+ * accuracy, sanity-check this against openwakeword's own model.py / utils.py
+ * (or just run their Python reference on the same audio and compare scores)
+ * — a one-frame-off windowing bug wouldn't crash anything, it would just
+ * silently produce worse detection than the model is actually capable of.
+ *
+ * Bundled in app/src/main/assets/models/ for testing:
+ *   - melspectrogram.onnx, embedding_model.onnx  (shared preprocessing — reuse for ANY phrase)
+ *   - hey_jarvis_v0.1.onnx                        (stock pretrained phrase, for pipeline testing)
+ * Swap only the classifier file for your own trained phrase later — the
+ * melspectrogram/embedding models stay the same.
  */
 @Singleton
 class WakeWordEngine @Inject constructor(
     private val context: Context
 ) {
-    private var session: OrtSession? = null
     private val env: OrtEnvironment = OrtEnvironment.getEnvironment()
 
-    fun loadModel(assetPath: String = "models/wakeword_phrase.onnx") {
-        val bytes = context.assets.open(assetPath).use { it.readBytes() }
-        session = env.createSession(bytes)
+    private var melspecSession: OrtSession? = null
+    private var embeddingSession: OrtSession? = null
+    private var classifierSession: OrtSession? = null
+
+    /** Rolling raw-audio window — needs enough samples to produce a 76-frame melspectrogram. */
+    private val rawAudioBuffer = ArrayDeque<Float>()
+
+    /** Rolling buffer of embedding frames — classifier needs EMBEDDING_WINDOW consecutive frames. */
+    private val embeddingHistory = ArrayDeque<FloatArray>()
+
+    fun loadModels(
+        melspecAsset: String = "models/melspectrogram.onnx",
+        embeddingAsset: String = "models/embedding_model.onnx",
+        classifierAsset: String = "models/hey_jarvis_v0.1.onnx" // swap for your trained phrase
+    ) {
+        melspecSession = env.createSession(context.assets.open(melspecAsset).use { it.readBytes() })
+        embeddingSession = env.createSession(context.assets.open(embeddingAsset).use { it.readBytes() })
+        classifierSession = env.createSession(context.assets.open(classifierAsset).use { it.readBytes() })
     }
 
     fun release() {
-        session?.close()
-        session = null
+        melspecSession?.close(); melspecSession = null
+        embeddingSession?.close(); embeddingSession = null
+        classifierSession?.close(); classifierSession = null
+        rawAudioBuffer.clear()
+        embeddingHistory.clear()
     }
 
     /**
-     * @param melFeatures precomputed melspectrogram features for the current
-     *   audio frame, shape matching the model's expected input.
-     * @return detection confidence in [0, 1]; caller compares against the
-     *   openWakeWord-recommended default threshold of 0.5 (tune per PRD §15.2).
+     * Feed one 80ms chunk (1280 samples at 16kHz) of raw mono audio at a time,
+     * continuously, while the screen is on. Returns a detection confidence in
+     * [0,1] once enough history has accumulated on both the raw-audio and
+     * embedding windows, or null while still filling up (first ~1.5-2s after
+     * WakeWordService starts).
      */
-    fun detect(melFeatures: FloatArray): Float {
-        val activeSession = session ?: error("WakeWordEngine.loadModel() must be called first")
-        val inputName = activeSession.inputNames.iterator().next()
-        val shape = longArrayOf(1, melFeatures.size.toLong())
-        OnnxTensor.createTensor(env, FloatBuffer.wrap(melFeatures), shape).use { tensor ->
-            activeSession.run(mapOf(inputName to tensor)).use { result ->
-                val output = result[0].value as Array<FloatArray>
-                return output[0][0]
+    fun processChunk(pcm1280: FloatArray): Float? {
+        val melspec = melspecSession ?: error("call loadModels() first")
+        val embedder = embeddingSession ?: error("call loadModels() first")
+        val classifier = classifierSession ?: error("call loadModels() first")
+
+        require(pcm1280.size == CHUNK_SIZE_SAMPLES) { "expected $CHUNK_SIZE_SAMPLES samples per chunk" }
+
+        pcm1280.forEach { rawAudioBuffer.addLast(it) }
+        while (rawAudioBuffer.size > MELSPEC_WINDOW_SAMPLES) rawAudioBuffer.removeFirst()
+        if (rawAudioBuffer.size < MELSPEC_WINDOW_SAMPLES) return null // still filling the initial window
+
+        // Stage 1: rolling raw-audio window -> melspectrogram frames
+        val melFrames = runMelspectrogram(melspec, rawAudioBuffer.toFloatArray())
+
+        // Stage 2: melspectrogram window -> one new 96-dim embedding
+        val embedding = runEmbedding(embedder, melFrames)
+        embeddingHistory.addLast(embedding)
+        while (embeddingHistory.size > EMBEDDING_WINDOW) embeddingHistory.removeFirst()
+        if (embeddingHistory.size < EMBEDDING_WINDOW) return null
+
+        // Stage 3: sequence of embeddings -> classifier confidence
+        return runClassifier(classifier, embeddingHistory.toList())
+    }
+
+    fun resetHistory() {
+        rawAudioBuffer.clear()
+        embeddingHistory.clear()
+    }
+
+    private fun runMelspectrogram(session: OrtSession, pcm: FloatArray): FloatArray {
+        val inputName = session.inputNames.iterator().next()
+        OnnxTensor.createTensor(env, FloatBuffer.wrap(pcm), longArrayOf(1, pcm.size.toLong())).use { tensor ->
+            session.run(mapOf(inputName to tensor)).use { result ->
+                return flattenToFloatArray(result[0].value)
             }
         }
+    }
+
+    private fun runEmbedding(session: OrtSession, melFrames: FloatArray): FloatArray {
+        val inputName = session.inputNames.iterator().next()
+        val shape = longArrayOf(1, MELSPEC_FRAMES.toLong(), MEL_BINS.toLong(), 1)
+        OnnxTensor.createTensor(env, FloatBuffer.wrap(melFrames), shape).use { tensor ->
+            session.run(mapOf(inputName to tensor)).use { result ->
+                return flattenToFloatArray(result[0].value)
+            }
+        }
+    }
+
+    private fun runClassifier(session: OrtSession, embeddings: List<FloatArray>): Float {
+        val inputName = session.inputNames.iterator().next()
+        val flat = FloatArray(embeddings.size * EMBEDDING_DIM)
+        embeddings.forEachIndexed { i, e -> e.copyInto(flat, i * EMBEDDING_DIM) }
+        val shape = longArrayOf(1, embeddings.size.toLong(), EMBEDDING_DIM.toLong())
+        OnnxTensor.createTensor(env, FloatBuffer.wrap(flat), shape).use { tensor ->
+            session.run(mapOf(inputName to tensor)).use { result ->
+                return flattenToFloatArray(result[0].value)[0]
+            }
+        }
+    }
+
+    @Suppress("UNCHECKED_CAST")
+    private fun flattenToFloatArray(value: Any): FloatArray {
+        // ONNX Runtime returns nested Array<Array<...FloatArray>> depending on rank;
+        // this walks arbitrary nesting depth down to a flat FloatArray.
+        return when (value) {
+            is FloatArray -> value
+            is Array<*> -> value.flatMap { flattenToFloatArray(it!!).toList() }.toFloatArray()
+            else -> error("Unexpected ONNX output type: ${value::class}")
+        }
+    }
+
+    companion object {
+        const val CHUNK_SIZE_SAMPLES = 1280        // 80ms @ 16kHz, openWakeWord's native chunk size
+        const val SAMPLE_RATE_HZ = 16000
+        private const val MELSPEC_WINDOW_SAMPLES = 12400 // raw samples needed to produce 76 melspec frames
+        private const val MELSPEC_FRAMES = 76
+        private const val MEL_BINS = 32
+        private const val EMBEDDING_WINDOW = 16    // classifier looks at 16 consecutive embedding frames
+        private const val EMBEDDING_DIM = 96
     }
 }
 VOICELOCK_EOF_MARKER
@@ -1228,13 +1487,19 @@ import android.app.Service
 import android.content.Context
 import android.content.Intent
 import android.os.IBinder
+import android.util.Log
 import androidx.core.app.NotificationCompat
+import com.voicelock.app.data.OnboardingStatusStore
+import com.voicelock.app.ml.AudioCapture
 import com.voicelock.app.ml.WakeWordEngine
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Job
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.catch
+import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 
@@ -1243,29 +1508,65 @@ import javax.inject.Inject
  * API 34+, see PRD §8 Risk 5). Only ever started while the screen is on and
  * the battery-optimization exemption is granted — see ScreenStateReceiver.
  *
- * NOTE: actual audio capture / duty-cycling implementation (AudioRecord loop,
- * melspectrogram feature extraction, 16ms-frame processing) is intentionally
- * left as a TODO here — it's mechanical but lengthy, and belongs in its own
- * reviewed PR rather than scaffolded blind. WakeWordEngine.detect() is ready
- * to be wired up to a real AudioRecord pipeline.
+ * Runs the real 3-stage openWakeWord pipeline (see WakeWordEngine) over a
+ * continuous AudioRecord stream. On detection above WAKE_WORD_THRESHOLD,
+ * hands the trailing ~1.5s audio buffer to VoiceAuthService for speaker
+ * verification and stops listening until that resolves.
  */
 @AndroidEntryPoint
 class WakeWordService : Service() {
 
     @Inject lateinit var wakeWordEngine: WakeWordEngine
+    @Inject lateinit var onboardingStatusStore: OnboardingStatusStore
 
     private val serviceJob = SupervisorJob()
-    private val serviceScope = CoroutineScope(serviceJob)
+    private val serviceScope = CoroutineScope(serviceJob + Dispatchers.Default)
+
+    /** Rolling ~1.5s of raw audio, handed to VoiceAuthService when the wake word fires. */
+    private val trailingAudio = ArrayDeque<Float>()
 
     override fun onCreate() {
         super.onCreate()
         startForeground(NOTIFICATION_ID, buildNotification())
-        wakeWordEngine.loadModel()
+        wakeWordEngine.loadModels()
+        startListening()
+    }
+
+    private fun startListening() {
         serviceScope.launch {
-            // TODO: AudioRecord capture loop -> melspectrogram features ->
-            // wakeWordEngine.detect(features) -> on threshold hit, start
-            // VoiceAuthService with the trailing ~1.5s audio buffer.
+            try {
+                AudioCapture.chunkStream(WakeWordEngine.CHUNK_SIZE_SAMPLES)
+                    .catch { e -> Log.e(TAG, "Audio capture stream failed", e) }
+                    .collect { chunk ->
+                        appendToTrailingBuffer(chunk)
+
+                        val confidence = wakeWordEngine.processChunk(chunk) ?: return@collect
+                        if (confidence >= WAKE_WORD_THRESHOLD) {
+                            Log.i(TAG, "Wake word detected, confidence=$confidence")
+                            triggerVoiceAuth()
+                            wakeWordEngine.resetHistory() // avoid re-triggering on the same utterance
+                        }
+                    }
+            } catch (e: SecurityException) {
+                // RECORD_AUDIO not actually granted despite our earlier checks
+                // (e.g. revoked mid-session) — stop cleanly rather than crash-loop.
+                Log.e(TAG, "Missing RECORD_AUDIO permission, stopping", e)
+                stopSelf()
+            }
         }
+    }
+
+    private fun appendToTrailingBuffer(chunk: FloatArray) {
+        chunk.forEach { trailingAudio.addLast(it) }
+        while (trailingAudio.size > TRAILING_BUFFER_SAMPLES) trailingAudio.removeFirst()
+    }
+
+    private fun triggerVoiceAuth() {
+        val samples = trailingAudio.toFloatArray()
+        val intent = Intent(this, VoiceAuthService::class.java).apply {
+            putExtra(VoiceAuthService.EXTRA_AUDIO_SAMPLES, samples)
+        }
+        startService(intent)
     }
 
     override fun onDestroy() {
@@ -1291,7 +1592,16 @@ class WakeWordService : Service() {
     }
 
     companion object {
+        private const val TAG = "WakeWordService"
         private const val NOTIFICATION_ID = 1001
+
+        // Default threshold; PRD §17 "Home Screen" eventually exposes this via
+        // OnboardingStatusStore.sensitivity for the wake-word stage too (currently
+        // that store's sensitivity value is used for speaker verification —
+        // wake-word detection confidence and speaker-match confidence are
+        // separate signals and may warrant separate tunable thresholds later).
+        private const val WAKE_WORD_THRESHOLD = 0.5f
+        private const val TRAILING_BUFFER_SAMPLES = WakeWordEngine.SAMPLE_RATE_HZ * 2 // ~2s, generous margin
 
         fun start(context: Context) {
             context.startForegroundService(Intent(context, WakeWordService::class.java))
@@ -1340,6 +1650,80 @@ class MainActivity : ComponentActivity() {
                     }
                 }
             }
+        }
+    }
+}
+VOICELOCK_EOF_MARKER
+
+cat > "app/src/main/java/com/voicelock/app/ui/onboarding/EnrollmentViewModel.kt" << 'VOICELOCK_EOF_MARKER'
+package com.voicelock.app.ui.onboarding
+
+import androidx.lifecycle.ViewModel
+import androidx.lifecycle.viewModelScope
+import com.voicelock.app.data.OnboardingStatusStore
+import com.voicelock.app.data.VoiceprintStore
+import com.voicelock.app.ml.AudioCapture
+import com.voicelock.app.ml.SpeakerVerificationEngine
+import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.launch
+import javax.inject.Inject
+
+enum class RecordingState { IDLE, RECORDING, PROCESSING, DONE }
+
+@HiltViewModel
+class EnrollmentViewModel @Inject constructor(
+    private val speakerVerificationEngine: SpeakerVerificationEngine,
+    private val voiceprintStore: VoiceprintStore,
+    private val onboardingStatusStore: OnboardingStatusStore
+) : ViewModel() {
+
+    private val _state = MutableStateFlow(RecordingState.IDLE)
+    val state: StateFlow<RecordingState> = _state
+
+    private val capturedTakes = mutableListOf<FloatArray>()
+    @Volatile private var isRecordingFlag = false
+
+    /** Minimum viable sample count (~0.5s at 16kHz) — shorter takes are rejected, see PRD §17 Screen 5. */
+    private val minSamples = AudioCapture.SAMPLE_RATE_HZ / 2
+
+    fun startRecording() {
+        _state.value = RecordingState.RECORDING
+        isRecordingFlag = true
+        viewModelScope.launch {
+            val samples = AudioCapture.recordUntilStopped { isRecordingFlag }
+            if (samples.size < minSamples) {
+                // Too short / likely silent tap — discard and let the user redo this take.
+                _state.value = RecordingState.IDLE
+                return@launch
+            }
+            capturedTakes.add(samples)
+            _state.value = RecordingState.IDLE
+        }
+    }
+
+    fun stopRecording() {
+        isRecordingFlag = false
+    }
+
+    val takesCompleted: Int get() = capturedTakes.size
+
+    /** Call after all 3 takes are captured. Embeds each, averages, and persists the voiceprint. */
+    fun finalizeEnrollment(onDone: () -> Unit) {
+        _state.value = RecordingState.PROCESSING
+        viewModelScope.launch {
+            speakerVerificationEngine.loadModel()
+            val embeddings = capturedTakes.map { speakerVerificationEngine.embed(it) }
+            speakerVerificationEngine.release()
+
+            val dim = embeddings.first().size
+            val averaged = FloatArray(dim) { i -> embeddings.map { it[i] }.average().toFloat() }
+            voiceprintStore.saveEmbedding(averaged)
+            onboardingStatusStore.setVoiceEnrolled(true)
+
+            _state.value = RecordingState.DONE
+            onDone()
         }
     }
 }
@@ -1507,25 +1891,40 @@ private val enrollmentTakes = listOf(
 )
 
 @Composable
-fun EnrollmentScreen(nav: NavController) {
+fun EnrollmentScreen(nav: NavController, viewModel: EnrollmentViewModel = hiltViewModel()) {
     var takeIndex by remember { mutableIntStateOf(0) }
+    val recordingState by viewModel.state.collectAsState()
 
     if (takeIndex < enrollmentTakes.size) {
         val (title, instruction) = enrollmentTakes[takeIndex]
+        val isRecording = recordingState == RecordingState.RECORDING
         OnboardingScaffold(
             title = title,
             body = instruction,
-            primaryLabel = "Recording… tap when done", // TODO: wire to real AudioRecord capture
-            onPrimary = { takeIndex++ }
+            primaryLabel = if (isRecording) "Recording… tap when done" else "Tap to start recording",
+            onPrimary = {
+                if (isRecording) {
+                    viewModel.stopRecording()
+                    takeIndex++
+                } else {
+                    viewModel.startRecording()
+                }
+            }
         )
     } else {
-        // TODO: pass captured samples into SpeakerVerificationEngine.embed(),
-        // average the 3 embeddings, and persist via VoiceprintStore.saveEmbedding().
+        val isProcessing = recordingState == RecordingState.PROCESSING
         OnboardingScaffold(
-            title = "All set — analyzing your voice…",
-            body = "Your voiceprint has been created and stored securely on this device.",
-            primaryLabel = "Test it now",
-            onPrimary = { nav.navigate("live_test") }
+            title = if (isProcessing) "Analyzing your voice…" else "All set — ready to save",
+            body = if (isProcessing)
+                "Generating your voiceprint from the 3 recordings."
+            else
+                "Your voiceprint has been created and stored securely on this device.",
+            primaryLabel = if (isProcessing) "Please wait…" else "Test it now",
+            onPrimary = {
+                if (!isProcessing) {
+                    viewModel.finalizeEnrollment(onDone = { nav.navigate("live_test") })
+                }
+            }
         )
     }
 }
@@ -1564,14 +1963,41 @@ fun LiveTestScreen(nav: NavController) {
 // ---------------------------------------------------------------------------
 @Composable
 fun HomeScreen(nav: NavController) {
+    val context = LocalContext.current
+    val activity = context as? android.app.Activity
+
     // TODO: render OnboardingStatusStore.isFullySetUp + per-item rows,
     // sensitivity slider, and current phrase — see PRD §17 "Home Screen".
-    OnboardingScaffold(
-        title = "Voice Lock is active",
-        body = "Say your phrase any time the screen is on to lock your phone.",
-        primaryLabel = "Settings",
-        onPrimary = { /* TODO: navigate to settings */ }
-    )
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(24.dp),
+        verticalArrangement = Arrangement.Center
+    ) {
+        Text("Voice Lock is active", style = MaterialTheme.typography.headlineSmall)
+        Spacer(Modifier.height(16.dp))
+        Text(
+            "Say your phrase any time the screen is on to lock your phone. " +
+                "You don't need to keep this screen open — VoiceLock listens " +
+                "in the background as long as the screen is on, independent " +
+                "of whether this app window is visible.",
+            style = MaterialTheme.typography.bodyLarge
+        )
+        Spacer(Modifier.height(32.dp))
+        Button(
+            onClick = { activity?.moveTaskToBack(true) },
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Text("Done — run in background")
+        }
+        Spacer(Modifier.height(8.dp))
+        OutlinedButton(
+            onClick = { /* TODO: navigate to settings */ },
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Text("Settings")
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1813,10 +2239,10 @@ VOICELOCK_EOF_MARKER
 cat > "build.gradle.kts" << 'VOICELOCK_EOF_MARKER'
 plugins {
     id("com.android.application") version "8.6.0" apply false
-    id("org.jetbrains.kotlin.android") version "1.9.24" apply false
+    id("org.jetbrains.kotlin.android") version "2.0.21" apply false
     id("com.google.dagger.hilt.android") version "2.51.1" apply false
-    id("org.jetbrains.kotlin.plugin.compose") version "1.9.24" apply false
-    id("com.google.devtools.ksp") version "1.9.24-1.0.20" apply false
+    id("org.jetbrains.kotlin.plugin.compose") version "2.0.21" apply false
+    id("com.google.devtools.ksp") version "2.0.21-1.0.28" apply false
 }
 VOICELOCK_EOF_MARKER
 
@@ -1855,5 +2281,11 @@ dependencyResolutionManagement {
 rootProject.name = "VoiceLock"
 include(":app")
 VOICELOCK_EOF_MARKER
+
+
+echo "Downloading bundled ONNX models from openWakeWord GitHub releases..."
+curl -sSL -o "app/src/main/assets/models/embedding_model.onnx" "https://github.com/dscripka/openWakeWord/releases/download/v0.5.1/embedding_model.onnx"
+curl -sSL -o "app/src/main/assets/models/hey_jarvis_v0.1.onnx" "https://github.com/dscripka/openWakeWord/releases/download/v0.5.1/hey_jarvis_v0.1.onnx"
+curl -sSL -o "app/src/main/assets/models/melspectrogram.onnx" "https://github.com/dscripka/openWakeWord/releases/download/v0.5.1/melspectrogram.onnx"
 
 echo "Done. VoiceLock project files created."

@@ -6,6 +6,11 @@
 set -euo pipefail
 
 SDK_ROOT="${ANDROID_SDK_ROOT:-$HOME/android-sdk}"
+# Capture the repo root as an ABSOLUTE path before we cd anywhere else —
+# otherwise the later gradle-wrapper step resolves $0 relative to whatever
+# directory we're sitting in by then, not where the script was invoked from.
+REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+
 mkdir -p "$SDK_ROOT/cmdline-tools"
 cd "$SDK_ROOT/cmdline-tools"
 
@@ -35,8 +40,8 @@ sdkmanager --sdk_root="$SDK_ROOT" \
 
 # Generate the Gradle wrapper (kept out of source control until first boot
 # so the repo doesn't need to vendor the wrapper jar)
-if [ ! -f "$(dirname "$0")/../gradlew" ]; then
-  cd "$(dirname "$0")/.."
+if [ ! -f "$REPO_ROOT/gradlew" ]; then
+  cd "$REPO_ROOT"
   gradle wrapper --gradle-version 8.9
 fi
 
