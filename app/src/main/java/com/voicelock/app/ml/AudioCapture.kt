@@ -11,6 +11,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 /**
  * Thin wrapper around AudioRecord, 16kHz mono float PCM (the format both
@@ -89,34 +90,35 @@ object AudioCapture {
      */
     @SuppressLint("MissingPermission")
     @RequiresPermission(Manifest.permission.RECORD_AUDIO)
-    suspend fun recordUntilStopped(shouldContinue: () -> Boolean): FloatArray {
-        val minBufferBytes = AudioRecord.getMinBufferSize(
-            SAMPLE_RATE_HZ,
-            AudioFormat.CHANNEL_IN_MONO,
-            AudioFormat.ENCODING_PCM_16BIT
-        )
-        val audioRecord = AudioRecord(
-            MediaRecorder.AudioSource.MIC,
-            SAMPLE_RATE_HZ,
-            AudioFormat.CHANNEL_IN_MONO,
-            AudioFormat.ENCODING_PCM_16BIT,
-            minBufferBytes
-        )
-        val allSamples = mutableListOf<Float>()
-        val chunk = ShortArray(1024)
+    suspend fun recordUntilStopped(shouldContinue: () -> Boolean): FloatArray =
+        withContext(Dispatchers.IO) {
+            val minBufferBytes = AudioRecord.getMinBufferSize(
+                SAMPLE_RATE_HZ,
+                AudioFormat.CHANNEL_IN_MONO,
+                AudioFormat.ENCODING_PCM_16BIT
+            )
+            val audioRecord = AudioRecord(
+                MediaRecorder.AudioSource.MIC,
+                SAMPLE_RATE_HZ,
+                AudioFormat.CHANNEL_IN_MONO,
+                AudioFormat.ENCODING_PCM_16BIT,
+                minBufferBytes
+            )
+            val allSamples = mutableListOf<Float>()
+            val chunk = ShortArray(1024)
 
-        try {
-            audioRecord.startRecording()
-            while (shouldContinue()) {
-                val read = audioRecord.read(chunk, 0, chunk.size)
-                if (read > 0) {
-                    for (i in 0 until read) allSamples.add(chunk[i] / 32768f)
+            try {
+                audioRecord.startRecording()
+                while (shouldContinue()) {
+                    val read = audioRecord.read(chunk, 0, chunk.size)
+                    if (read > 0) {
+                        for (i in 0 until read) allSamples.add(chunk[i] / 32768f)
+                    }
                 }
+            } finally {
+                audioRecord.stop()
+                audioRecord.release()
             }
-        } finally {
-            audioRecord.stop()
-            audioRecord.release()
+            allSamples.toFloatArray()
         }
-        return allSamples.toFloatArray()
-    }
 }
