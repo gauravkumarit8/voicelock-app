@@ -216,14 +216,41 @@ fun LiveTestScreen(nav: NavController) {
 // ---------------------------------------------------------------------------
 @Composable
 fun HomeScreen(nav: NavController) {
+    val context = LocalContext.current
+    val activity = context as? android.app.Activity
+
     // TODO: render OnboardingStatusStore.isFullySetUp + per-item rows,
     // sensitivity slider, and current phrase — see PRD §17 "Home Screen".
-    OnboardingScaffold(
-        title = "Voice Lock is active",
-        body = "Say your phrase any time the screen is on to lock your phone.",
-        primaryLabel = "Settings",
-        onPrimary = { /* TODO: navigate to settings */ }
-    )
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(24.dp),
+        verticalArrangement = Arrangement.Center
+    ) {
+        Text("Voice Lock is active", style = MaterialTheme.typography.headlineSmall)
+        Spacer(Modifier.height(16.dp))
+        Text(
+            "Say your phrase any time the screen is on to lock your phone. " +
+                "You don't need to keep this screen open — VoiceLock listens " +
+                "in the background as long as the screen is on, independent " +
+                "of whether this app window is visible.",
+            style = MaterialTheme.typography.bodyLarge
+        )
+        Spacer(Modifier.height(32.dp))
+        Button(
+            onClick = { activity?.moveTaskToBack(true) },
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Text("Done — run in background")
+        }
+        Spacer(Modifier.height(8.dp))
+        OutlinedButton(
+            onClick = { /* TODO: navigate to settings */ },
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Text("Settings")
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
