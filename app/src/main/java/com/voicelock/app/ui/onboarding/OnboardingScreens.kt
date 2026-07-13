@@ -202,23 +202,30 @@ fun EnrollmentScreen(nav: NavController, viewModel: EnrollmentViewModel = hiltVi
 // ---------------------------------------------------------------------------
 @Composable
 fun LiveTestScreen(nav: NavController) {
+    val context = LocalContext.current
+    val lockManager = remember { com.voicelock.app.admin.LockManager(context) }
     var failed by remember { mutableStateOf(false) }
 
     if (!failed) {
         OnboardingScaffold(
             title = "Let's make sure it works",
-            body = "We're going to lock your screen and turn it back on. When you see the lock " +
-                "screen, unlock it and come back — then say your phrase to test voice lock live.",
-            primaryLabel = "Start test",
-            // TODO: trigger LockManager.lockNow() here, then listen for a
-            // real VoiceAuthService success callback within ~15s.
-            onPrimary = { nav.navigate("home") { popUpTo("welcome") { inclusive = true } } }
+            body = "Tap below to lock your screen right now using VoiceLock's Device Admin " +
+                "permission. This confirms the lock mechanism itself works — full voice-triggered " +
+                "locking depends on additional pieces not yet finished (see the app's README).",
+            primaryLabel = "Lock now",
+            onPrimary = {
+                val locked = lockManager.lockNow()
+                if (!locked) failed = true
+                // If locked == true, the screen locks immediately; there's nothing
+                // further to navigate to here since the OS takes over the display.
+            }
         )
     } else {
         OnboardingScaffold(
-            title = "We didn't catch it",
-            body = "This usually means one of the earlier steps needs attention.",
-            primaryLabel = "Try the test again",
+            title = "Couldn't lock the screen",
+            body = "This usually means Device Admin isn't active. Go back and grant it, " +
+                "then try again.",
+            primaryLabel = "Try again",
             onPrimary = { failed = false },
             secondaryLabel = "Continue anyway, I'll fix this later",
             onSecondary = { nav.navigate("home") { popUpTo("welcome") { inclusive = true } } }

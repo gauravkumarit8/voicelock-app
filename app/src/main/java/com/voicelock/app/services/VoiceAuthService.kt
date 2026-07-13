@@ -45,17 +45,32 @@ class VoiceAuthService : Service() {
     private suspend fun verifyAndLock(audioSamples: FloatArray) {
         val enrolled = voiceprintStore.loadEmbedding()
         if (enrolled == null) {
+            android.util.Log.w(TAG, "No enrolled voiceprint found — skipping verification")
             stopSelf()
             return
         }
 
-        speakerVerificationEngine.loadModel()
+        try {
+            speakerVerificationEngine.loadModel()
+        } catch (e: Exception) {
+            android.util.Log.e(
+                TAG,
+                "Speaker verification model failed to load — is speaker_embedding.onnx present " +
+                    "in app/src/main/assets/models/? See README 'Speaker verification model'.",
+                e
+            )
+            stopSelf()
+            return
+        }
+
         val candidate = speakerVerificationEngine.embed(audioSamples)
         val similarity = speakerVerificationEngine.cosineSimilarity(enrolled, candidate)
         val threshold = onboardingStatusStore.sensitivity.first()
+        android.util.Log.i(TAG, "Speaker similarity=$similarity threshold=$threshold")
 
         if (similarity >= threshold) {
-            lockManager.lockNow()
+            val locked = lockManager.lockNow()
+            android.util.Log.i(TAG, "lockNow() called, result=$locked")
             // Silent re-embedding — PRD §15.2, adapts the voiceprint over time.
             voiceprintStore.reinforceEmbedding(candidate)
         }
@@ -72,6 +87,7 @@ class VoiceAuthService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     companion object {
+        private const val TAG = "VoiceAuthService"
         const val EXTRA_AUDIO_SAMPLES = "audio_samples"
     }
 }

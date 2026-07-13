@@ -115,6 +115,65 @@ fi
 echo "Android SDK ready at $SDK_ROOT"
 VOICELOCK_EOF_MARKER
 
+cat > ".gitignore" << 'VOICELOCK_EOF_MARKER'
+# --- Build outputs ---
+*.apk
+*.aab
+*.ap_
+*.dex
+build/
+app/build/
+out/
+
+# --- Gradle ---
+.gradle/
+gradle-app.setting
+!gradle/wrapper/gradle-wrapper.jar
+!gradle/wrapper/gradle-wrapper.properties
+gradlew.bat.log
+
+# --- Local machine/SDK config (never portable, never shared) ---
+local.properties
+
+# --- Android Studio / IntelliJ ---
+.idea/
+*.iml
+*.ipr
+*.iws
+.navigation/
+captures/
+.externalNativeBuild/
+.cxx/
+
+# --- VS Code / Codespaces ---
+.vscode/
+*.code-workspace
+
+# --- OS junk ---
+.DS_Store
+Thumbs.db
+
+# --- Logs ---
+*.log
+
+# --- Signing keys — NEVER commit these ---
+*.jks
+*.keystore
+keystore.properties
+
+# --- Test/coverage output ---
+*.class
+/captures
+.externalNativeBuild
+.cxx
+
+# --- Model files are large binaries pulled from openWakeWord's GitHub
+# releases by create_voicelock_project.sh (or manually) rather than
+# committed to source control. Uncomment if you'd rather vendor them
+# directly in git instead of re-downloading on setup:
+# app/src/main/assets/models/*.onnx
+VOICELOCK_EOF_MARKER
+
 cat > "README.md" << 'VOICELOCK_EOF_MARKER'
 # VoiceLock
 
@@ -984,6 +1043,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 /**
  * Thin wrapper around AudioRecord, 16kHz mono float PCM (the format both
@@ -1062,36 +1122,37 @@ object AudioCapture {
      */
     @SuppressLint("MissingPermission")
     @RequiresPermission(Manifest.permission.RECORD_AUDIO)
-    suspend fun recordUntilStopped(shouldContinue: () -> Boolean): FloatArray {
-        val minBufferBytes = AudioRecord.getMinBufferSize(
-            SAMPLE_RATE_HZ,
-            AudioFormat.CHANNEL_IN_MONO,
-            AudioFormat.ENCODING_PCM_16BIT
-        )
-        val audioRecord = AudioRecord(
-            MediaRecorder.AudioSource.MIC,
-            SAMPLE_RATE_HZ,
-            AudioFormat.CHANNEL_IN_MONO,
-            AudioFormat.ENCODING_PCM_16BIT,
-            minBufferBytes
-        )
-        val allSamples = mutableListOf<Float>()
-        val chunk = ShortArray(1024)
+    suspend fun recordUntilStopped(shouldContinue: () -> Boolean): FloatArray =
+        withContext(Dispatchers.IO) {
+            val minBufferBytes = AudioRecord.getMinBufferSize(
+                SAMPLE_RATE_HZ,
+                AudioFormat.CHANNEL_IN_MONO,
+                AudioFormat.ENCODING_PCM_16BIT
+            )
+            val audioRecord = AudioRecord(
+                MediaRecorder.AudioSource.MIC,
+                SAMPLE_RATE_HZ,
+                AudioFormat.CHANNEL_IN_MONO,
+                AudioFormat.ENCODING_PCM_16BIT,
+                minBufferBytes
+            )
+            val allSamples = mutableListOf<Float>()
+            val chunk = ShortArray(1024)
 
-        try {
-            audioRecord.startRecording()
-            while (shouldContinue()) {
-                val read = audioRecord.read(chunk, 0, chunk.size)
-                if (read > 0) {
-                    for (i in 0 until read) allSamples.add(chunk[i] / 32768f)
+            try {
+                audioRecord.startRecording()
+                while (shouldContinue()) {
+                    val read = audioRecord.read(chunk, 0, chunk.size)
+                    if (read > 0) {
+                        for (i in 0 until read) allSamples.add(chunk[i] / 32768f)
+                    }
                 }
+            } finally {
+                audioRecord.stop()
+                audioRecord.release()
             }
-        } finally {
-            audioRecord.stop()
-            audioRecord.release()
+            allSamples.toFloatArray()
         }
-        return allSamples.toFloatArray()
-    }
 }
 VOICELOCK_EOF_MARKER
 
@@ -1445,17 +1506,32 @@ class VoiceAuthService : Service() {
     private suspend fun verifyAndLock(audioSamples: FloatArray) {
         val enrolled = voiceprintStore.loadEmbedding()
         if (enrolled == null) {
+            android.util.Log.w(TAG, "No enrolled voiceprint found — skipping verification")
             stopSelf()
             return
         }
 
-        speakerVerificationEngine.loadModel()
+        try {
+            speakerVerificationEngine.loadModel()
+        } catch (e: Exception) {
+            android.util.Log.e(
+                TAG,
+                "Speaker verification model failed to load — is speaker_embedding.onnx present " +
+                    "in app/src/main/assets/models/? See README 'Speaker verification model'.",
+                e
+            )
+            stopSelf()
+            return
+        }
+
         val candidate = speakerVerificationEngine.embed(audioSamples)
         val similarity = speakerVerificationEngine.cosineSimilarity(enrolled, candidate)
         val threshold = onboardingStatusStore.sensitivity.first()
+        android.util.Log.i(TAG, "Speaker similarity=$similarity threshold=$threshold")
 
         if (similarity >= threshold) {
-            lockManager.lockNow()
+            val locked = lockManager.lockNow()
+            android.util.Log.i(TAG, "lockNow() called, result=$locked")
             // Silent re-embedding — PRD §15.2, adapts the voiceprint over time.
             voiceprintStore.reinforceEmbedding(candidate)
         }
@@ -1472,6 +1548,7 @@ class VoiceAuthService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     companion object {
+        private const val TAG = "VoiceAuthService"
         const val EXTRA_AUDIO_SAMPLES = "audio_samples"
     }
 }
@@ -1934,23 +2011,30 @@ fun EnrollmentScreen(nav: NavController, viewModel: EnrollmentViewModel = hiltVi
 // ---------------------------------------------------------------------------
 @Composable
 fun LiveTestScreen(nav: NavController) {
+    val context = LocalContext.current
+    val lockManager = remember { com.voicelock.app.admin.LockManager(context) }
     var failed by remember { mutableStateOf(false) }
 
     if (!failed) {
         OnboardingScaffold(
             title = "Let's make sure it works",
-            body = "We're going to lock your screen and turn it back on. When you see the lock " +
-                "screen, unlock it and come back — then say your phrase to test voice lock live.",
-            primaryLabel = "Start test",
-            // TODO: trigger LockManager.lockNow() here, then listen for a
-            // real VoiceAuthService success callback within ~15s.
-            onPrimary = { nav.navigate("home") { popUpTo("welcome") { inclusive = true } } }
+            body = "Tap below to lock your screen right now using VoiceLock's Device Admin " +
+                "permission. This confirms the lock mechanism itself works — full voice-triggered " +
+                "locking depends on additional pieces not yet finished (see the app's README).",
+            primaryLabel = "Lock now",
+            onPrimary = {
+                val locked = lockManager.lockNow()
+                if (!locked) failed = true
+                // If locked == true, the screen locks immediately; there's nothing
+                // further to navigate to here since the OS takes over the display.
+            }
         )
     } else {
         OnboardingScaffold(
-            title = "We didn't catch it",
-            body = "This usually means one of the earlier steps needs attention.",
-            primaryLabel = "Try the test again",
+            title = "Couldn't lock the screen",
+            body = "This usually means Device Admin isn't active. Go back and grant it, " +
+                "then try again.",
+            primaryLabel = "Try again",
             onPrimary = { failed = false },
             secondaryLabel = "Continue anyway, I'll fix this later",
             onSecondary = { nav.navigate("home") { popUpTo("welcome") { inclusive = true } } }
