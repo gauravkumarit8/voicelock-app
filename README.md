@@ -6,40 +6,64 @@ product/architecture spec this code implements.
 
 ## Project status
 
-Real audio capture and the openWakeWord pipeline are now wired in — this is
-no longer a click-through shell. What actually works end-to-end:
+**The full pipeline now runs end-to-end with no missing files** — you can
+test the complete flow today:
 
-1. **Enrollment recording** (`EnrollmentViewModel` + `AudioCapture`) — real
-   `AudioRecord` capture for each of the 3 takes, embedded via
-   `SpeakerVerificationEngine`, averaged, and persisted encrypted.
+1. **Enrollment** (`EnrollmentViewModel` + `AudioCapture`) — real `AudioRecord`
+   capture for each of the 3 takes.
 2. **Wake-word detection** (`WakeWordService` + `WakeWordEngine`) — the real
    3-stage openWakeWord pipeline (melspectrogram → embedding → classifier),
-   running continuously over a live `AudioRecord` stream while the screen is on.
-3. **A real stock model is bundled** at `app/src/main/assets/models/` —
-   `melspectrogram.onnx`, `embedding_model.onnx` (shared preprocessing), and
-   `hey_jarvis_v0.1.onnx` (openWakeWord's pretrained "Hey Jarvis" phrase) —
-   pulled directly from openWakeWord's GitHub releases, so the pipeline is
-   testable with a real phrase before you train your own custom one.
+   bundled with a real pretrained phrase, **"Hey Jarvis"** (pulled from
+   openWakeWord's GitHub releases — your actual custom phrase isn't trained
+   yet, see "Training your wake word model" below).
+3. **Speaker verification** (`SpeakerVerificationEngine`) — deliberately
+   **not** a trained neural model. It's a self-contained classical DSP
+   feature extractor (log-mel-filterbank mean/variance, pure Kotlin, zero
+   external model file) so there's nothing left to source/download before
+   testing works. Stated plainly: this will be meaningfully less accurate
+   at telling similar voices apart than a real trained embedding (GE2E/
+   ECAPA-TDNN) — it's good enough to validate the whole pipeline and use for
+   real testing, not a final-quality biometric. Swap it for a trained ONNX
+   model later without touching any caller — see the class doc for the
+   pattern to follow (same shape as `WakeWordEngine`).
+4. **Lock mechanism** — the Live Test onboarding screen now actually calls
+   `LockManager.lockNow()`, not a cosmetic placeholder.
+5. **Settings screen** — real sensitivity slider wired to `OnboardingStatusStore`,
+   plus a re-enroll shortcut.
+6. **Returning-user flow** — the app remembers completed onboarding across
+   restarts (`MainActivity` checks `OnboardingStatusStore.isFullySetUp`) and
+   skips straight to Home instead of forcing you through setup every launch.
 
-**What's still missing before this is a finished product:**
+### How to actually test it
+1. Complete onboarding — when it asks you to record your phrase, **say "Hey
+   Jarvis"** (all 3 takes), since that's the only phrase the bundled
+   classifier recognizes right now.
+2. On the "Let's make sure it works" screen, tap "Lock now" to confirm
+   Device Admin + `lockNow()` work in isolation.
+3. Back out to Home (or relaunch the app — it'll skip straight there now).
+4. With the screen on, say **"Hey Jarvis"** out loud. Watch logs if it
+   doesn't lock:
+   ```bash
+   adb logcat | grep -E "WakeWordService|VoiceAuthService"
+   ```
+   You should see a wake-word confidence score, then a speaker-similarity
+   score. If similarity is consistently below the sensitivity threshold even
+   when it's really you, lower the slider in Settings — the DSP-based
+   embedding's similarity distribution is not the same as a trained model's,
+   so the right threshold for your voice/device/mic is something you'll need
+   to find empirically, not something pre-tuned for you.
 
-- **`SpeakerVerificationEngine`'s model file is NOT bundled.** There's no
-  pretrained, permissively-licensed speaker-embedding ONNX file included —
-  you still need to source/convert one and place it at
-  `app/src/main/assets/models/speaker_embedding.onnx`, or enrollment/voice-auth
-  will throw a `FileNotFoundException` at runtime.
-- **Your actual custom phrase isn't trained yet** — the bundled classifier
-  detects "Hey Jarvis", not your chosen VoiceLock phrase. See "Training your
-  wake word model" below to swap it once you're ready.
-- **The melspectrogram/embedding windowing math in `WakeWordEngine` is
+**What's still not real/finished:**
+- Your actual chosen phrase isn't trained — everything currently runs on
+  "Hey Jarvis".
+- The melspectrogram/embedding windowing math in `WakeWordEngine` is
   reconstructed from openWakeWord's public docs, not verified against a live
-  run of their reference implementation.** It should work, but if detection
-  accuracy seems off, that's the first place to check — see the caveat
-  comment directly in `WakeWordEngine.kt`.
-- The live "Test your setup" screen (`LiveTestScreen`) still doesn't call
-  `LockManager.lockNow()` or listen for a real detection callback — it's
-  cosmetic until wired up.
-- Settings screen is still a placeholder.
+  run of their reference implementation — see the caveat comment in that file.
+- `SpeakerVerificationEngine`'s DSP approach is a testing baseline, not a
+  production-quality biometric — revisit before shipping (PRD §8 Risk 4 has
+  more on realistic accuracy expectations even for trained models).
+- OEM battery-kill deep links (`OemBatterySettings`) are unverified against
+  real device firmware.
 
 
 ## Developing in GitHub Codespaces

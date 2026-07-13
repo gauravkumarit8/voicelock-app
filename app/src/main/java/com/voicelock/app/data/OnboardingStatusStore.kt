@@ -38,7 +38,15 @@ class OnboardingStatusStore @Inject constructor(
             (prefs[Keys.VOICE_ENROLLED] ?: false)
     }
 
-    val sensitivity: Flow<Float> = context.dataStore.data.map { it[Keys.SENSITIVITY] ?: 0.85f }
+    val sensitivity: Flow<Float> = context.dataStore.data.map {
+        // Default lowered from the PRD's original 0.85 — that threshold assumed a trained
+        // neural speaker embedding (GE2E/ECAPA). The current SpeakerVerificationEngine is a
+        // classical DSP feature extractor (see its class doc) with a different, generally
+        // less cleanly-separated similarity distribution between same-speaker/different-speaker
+        // pairs. 0.6 is a starting point for testing, not a validated value — use the Settings
+        // slider to tune it against your own voice once you're testing for real.
+        it[Keys.SENSITIVITY] ?: 0.6f
+    }
 
     suspend fun setMicGranted(v: Boolean) = context.dataStore.edit { it[Keys.MIC_GRANTED] = v }
     suspend fun setDeviceAdminActive(v: Boolean) = context.dataStore.edit { it[Keys.DEVICE_ADMIN_ACTIVE] = v }

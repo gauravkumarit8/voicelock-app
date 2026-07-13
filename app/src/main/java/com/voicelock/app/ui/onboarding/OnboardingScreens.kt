@@ -24,7 +24,8 @@ fun WelcomeScreen(nav: NavController) {
         title = "Lock your phone with your voice",
         body = "VoiceLock listens for your phrase only while your screen is on, " +
             "and only your voice can trigger it. Nothing is recorded or sent " +
-            "anywhere — it all happens on your phone.",
+            "anywhere — it all happens on your phone.\n\nThis test build recognizes " +
+            "the phrase \"Hey Jarvis\" only — custom phrase training comes later.",
         primaryLabel = "Get started",
         onPrimary = { nav.navigate("mic_permission") }
     )
@@ -152,9 +153,12 @@ fun OemSettingsScreen(nav: NavController) {
 // Screen 5 — Voice enrollment (3 varied-condition takes — PRD §15.2)
 // ---------------------------------------------------------------------------
 private val enrollmentTakes = listOf(
-    "Say it normally" to "Speak your phrase in a normal, relaxed voice.",
-    "Say it a bit quicker" to "Now say it slightly faster, like you're in a hurry.",
-    "Say it with some background noise, if you can" to
+    "Say \"Hey Jarvis\" normally" to
+        "This test build recognizes the phrase \"Hey Jarvis\" (a stock demo phrase — " +
+        "your own custom phrase isn't trained yet, see the app's README). Speak it in a " +
+        "normal, relaxed voice.",
+    "Say \"Hey Jarvis\" a bit quicker" to "Now say it slightly faster, like you're in a hurry.",
+    "Say \"Hey Jarvis\" with some background noise, if you can" to
         "If you can, do this one near a TV, fan, or other noise — otherwise just repeat it normally."
 )
 
@@ -252,7 +256,7 @@ fun HomeScreen(nav: NavController) {
         Text("Voice Lock is active", style = MaterialTheme.typography.headlineSmall)
         Spacer(Modifier.height(16.dp))
         Text(
-            "Say your phrase any time the screen is on to lock your phone. " +
+            "Say \"Hey Jarvis\" any time the screen is on to lock your phone. " +
                 "You don't need to keep this screen open — VoiceLock listens " +
                 "in the background as long as the screen is on, independent " +
                 "of whether this app window is visible.",
@@ -267,10 +271,53 @@ fun HomeScreen(nav: NavController) {
         }
         Spacer(Modifier.height(8.dp))
         OutlinedButton(
-            onClick = { /* TODO: navigate to settings */ },
+            onClick = { nav.navigate("settings") },
             modifier = Modifier.fillMaxWidth()
         ) {
             Text("Settings")
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Settings — sensitivity slider (PRD §4/§17)
+// ---------------------------------------------------------------------------
+@Composable
+fun SettingsScreen(nav: NavController, viewModel: SettingsViewModel = hiltViewModel()) {
+    val sensitivity by viewModel.sensitivity.collectAsState(initial = 0.6f)
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(24.dp),
+        verticalArrangement = Arrangement.Center
+    ) {
+        Text("Settings", style = MaterialTheme.typography.headlineSmall)
+        Spacer(Modifier.height(24.dp))
+
+        Text("Voice match sensitivity", style = MaterialTheme.typography.titleMedium)
+        Text(
+            "Lower = easier to trigger, more false accepts. Higher = stricter, more false " +
+                "rejects. Current: ${(sensitivity * 100).toInt()}%",
+            style = MaterialTheme.typography.bodyMedium
+        )
+        Slider(
+            value = sensitivity,
+            onValueChange = { viewModel.setSensitivity(it) },
+            valueRange = 0.2f..0.95f
+        )
+
+        Spacer(Modifier.height(32.dp))
+        Button(
+            onClick = { nav.navigate("enrollment") },
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Text("Re-enroll voice")
+        }
+
+        Spacer(Modifier.height(8.dp))
+        TextButton(onClick = { nav.popBackStack() }, modifier = Modifier.fillMaxWidth()) {
+            Text("Back")
         }
     }
 }
