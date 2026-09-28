@@ -278,6 +278,14 @@ fun HomeScreen(nav: NavController, status: OnboardingStatusViewModel = hiltViewM
     }
     val allGood = micOk && adminOk && batteryOk
 
+    // Android 13+: without this the "VoiceLock is ready" notification is hidden.
+    val notifLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { }
+    LaunchedEffect(Unit) {
+        if (android.os.Build.VERSION.SDK_INT >= 33) {
+            notifLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+        }
+    }
+
     Column(
         modifier = Modifier
             .fillMaxSize()

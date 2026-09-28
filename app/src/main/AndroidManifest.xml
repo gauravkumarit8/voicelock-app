@@ -8,6 +8,7 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <!-- Required so the app can request exemption from Doze/App Standby —
          see PRD §8 Risk 1: without this, the mic foreground service throws
@@ -49,8 +50,8 @@
             </intent-filter>
         </receiver>
 
-        <!-- ScreenStateReceiver is registered dynamically in VoiceLockApplication.onCreate():
-             SCREEN_ON / SCREEN_OFF are never delivered to manifest-declared receivers. -->
+        <!-- Screen on/off is handled inside WakeWordService via a dynamically registered
+             receiver: SCREEN_ON / SCREEN_OFF are never delivered to manifest receivers. -->
 
         <receiver
             android:name=".receivers.BootCompletedReceiver"
