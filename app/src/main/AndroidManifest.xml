@@ -49,18 +49,8 @@
             </intent-filter>
         </receiver>
 
-        <!-- Screen ON/OFF gatekeeper. See PRD §8 Risk 1 — this receiver only
-             STARTS the mic service if the battery-optimization exemption
-             (Onboarding Screen 3) has already been granted; otherwise it
-             would crash with a SecurityException on API 34+. -->
-        <receiver
-            android:name=".receivers.ScreenStateReceiver"
-            android:exported="false">
-            <intent-filter>
-                <action android:name="android.intent.action.SCREEN_ON" />
-                <action android:name="android.intent.action.SCREEN_OFF" />
-            </intent-filter>
-        </receiver>
+        <!-- ScreenStateReceiver is registered dynamically in VoiceLockApplication.onCreate():
+             SCREEN_ON / SCREEN_OFF are never delivered to manifest-declared receivers. -->
 
         <receiver
             android:name=".receivers.BootCompletedReceiver"

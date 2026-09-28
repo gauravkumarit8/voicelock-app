@@ -61,7 +61,7 @@ class EnrollmentViewModel @Inject constructor(
 
             val dim = embeddings.first().size
             val averaged = FloatArray(dim) { i -> embeddings.map { it[i] }.average().toFloat() }
-            voiceprintStore.saveEmbedding(averaged)
+            voiceprintStore.saveEmbedding(voiceprintStore.l2Normalize(averaged))
             onboardingStatusStore.setVoiceEnrolled(true)
 
             _state.value = RecordingState.DONE

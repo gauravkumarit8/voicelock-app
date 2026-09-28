@@ -35,10 +35,11 @@ fun WelcomeScreen(nav: NavController) {
 // Screen 1 — Microphone permission
 // ---------------------------------------------------------------------------
 @Composable
-fun MicPermissionScreen(nav: NavController) {
+fun MicPermissionScreen(nav: NavController, status: OnboardingStatusViewModel = hiltViewModel()) {
     var denied by remember { mutableStateOf(false) }
     val context = LocalContext.current
     val launcher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        status.setMicGranted(granted)
         if (granted) nav.navigate("device_admin") else denied = true
     }
 
@@ -67,10 +68,12 @@ fun MicPermissionScreen(nav: NavController) {
 // Screen 2 — Device Admin (required, no skip — see PRD §17)
 // ---------------------------------------------------------------------------
 @Composable
-fun DeviceAdminScreen(nav: NavController) {
+fun DeviceAdminScreen(nav: NavController, status: OnboardingStatusViewModel = hiltViewModel()) {
     val context = LocalContext.current
     val launcher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) {
-        if (VoiceLockDeviceAdminReceiver.isActive(context)) {
+        val active = VoiceLockDeviceAdminReceiver.isActive(context)
+        status.setDeviceAdminActive(active)
+        if (active) {
             nav.navigate("battery_exemption")
         }
         // If not active, stay on this screen — "Try again" re-triggers below.
@@ -91,11 +94,13 @@ fun DeviceAdminScreen(nav: NavController) {
 // Screen 3 — Battery optimization exemption
 // ---------------------------------------------------------------------------
 @Composable
-fun BatteryExemptionScreen(nav: NavController) {
+fun BatteryExemptionScreen(nav: NavController, status: OnboardingStatusViewModel = hiltViewModel()) {
     var denied by remember { mutableStateOf(false) }
     val context = LocalContext.current
     val launcher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) {
-        if (BatteryExemption.isExempt(context)) {
+        val exempt = BatteryExemption.isExempt(context)
+        status.setBatteryExempt(exempt)
+        if (exempt) {
             nav.navigate(if (OemBatterySettings.isKnownRestrictiveOem()) "oem_settings" else "enrollment")
         } else {
             denied = true
@@ -130,7 +135,7 @@ fun BatteryExemptionScreen(nav: NavController) {
 // Screen 4 — OEM-specific settings (conditional — only known-restrictive OEMs)
 // ---------------------------------------------------------------------------
 @Composable
-fun OemSettingsScreen(nav: NavController) {
+fun OemSettingsScreen(nav: NavController, status: OnboardingStatusViewModel = hiltViewModel()) {
     val context = LocalContext.current
     val manufacturer = OemBatterySettings.manufacturerDisplayName()
 
@@ -145,7 +150,7 @@ fun OemSettingsScreen(nav: NavController) {
             if (!opened) OemBatterySettings.openGenericBatterySettings(context)
         },
         secondaryLabel = "Continue anyway",
-        onSecondary = { nav.navigate("enrollment") }
+        onSecondary = { status.setOemStepAcknowledged(true); nav.navigate("enrollment") }
     )
 }
 
@@ -205,7 +210,7 @@ fun EnrollmentScreen(nav: NavController, viewModel: EnrollmentViewModel = hiltVi
 // Screen 6 — Live "Test your setup" (PRD §17 — closes the loop on Risk 1)
 // ---------------------------------------------------------------------------
 @Composable
-fun LiveTestScreen(nav: NavController) {
+fun LiveTestScreen(nav: NavController, status: OnboardingStatusViewModel = hiltViewModel()) {
     val context = LocalContext.current
     val lockManager = remember { com.voicelock.app.admin.LockManager(context) }
     var failed by remember { mutableStateOf(false) }
@@ -219,7 +224,7 @@ fun LiveTestScreen(nav: NavController) {
             primaryLabel = "Lock now",
             onPrimary = {
                 val locked = lockManager.lockNow()
-                if (!locked) failed = true
+                if (!locked) failed = true else status.setLiveTestPassed(true)
                 // If locked == true, the screen locks immediately; there's nothing
                 // further to navigate to here since the OS takes over the display.
             }
@@ -241,35 +246,75 @@ fun LiveTestScreen(nav: NavController) {
 // Home — persistent setup status (PRD §17)
 // ---------------------------------------------------------------------------
 @Composable
-fun HomeScreen(nav: NavController) {
+fun HomeScreen(nav: NavController, status: OnboardingStatusViewModel = hiltViewModel()) {
     val context = LocalContext.current
     val activity = context as? android.app.Activity
 
-    // TODO: render OnboardingStatusStore.isFullySetUp + per-item rows,
-    // sensitivity slider, and current phrase — see PRD §17 "Home Screen".
+    // Live OS state (not stored flags) so revocations outside the app are reflected.
+    var micOk by remember { mutableStateOf(false) }
+    var adminOk by remember { mutableStateOf(false) }
+    var batteryOk by remember { mutableStateOf(false) }
+    val lifecycleOwner = androidx.compose.ui.platform.LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
+            if (event == androidx.lifecycle.Lifecycle.Event.ON_RESUME) {
+                micOk = androidx.core.content.ContextCompat.checkSelfPermission(
+                    context, Manifest.permission.RECORD_AUDIO
+                ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+                adminOk = VoiceLockDeviceAdminReceiver.isActive(context)
+                batteryOk = BatteryExemption.isExempt(context)
+                status.setMicGranted(micOk)
+                status.setDeviceAdminActive(adminOk)
+                status.setBatteryExempt(batteryOk)
+                // App is in the foreground here, so starting the mic service is allowed —
+                // covers "screen was already on when the process started".
+                if (micOk && adminOk && batteryOk) {
+                    com.voicelock.app.services.WakeWordService.start(context)
+                }
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+    val allGood = micOk && adminOk && batteryOk
+
     Column(
         modifier = Modifier
             .fillMaxSize()
             .padding(24.dp),
         verticalArrangement = Arrangement.Center
     ) {
-        Text("Voice Lock is active", style = MaterialTheme.typography.headlineSmall)
+        Text(
+            if (allGood) "VoiceLock is active" else "Setup incomplete",
+            style = MaterialTheme.typography.headlineSmall
+        )
+        Spacer(Modifier.height(16.dp))
+        StatusRow("Microphone access", micOk)
+        StatusRow("Screen-lock permission (Device Admin)", adminOk)
+        StatusRow("Battery optimization exemption", batteryOk)
         Spacer(Modifier.height(16.dp))
         Text(
-            "Say \"Hey Jarvis\" any time the screen is on to lock your phone. " +
-                "You don't need to keep this screen open — VoiceLock listens " +
-                "in the background as long as the screen is on, independent " +
-                "of whether this app window is visible.",
+            if (allGood)
+                "Say \"Hey Jarvis\" any time the screen is on to lock your phone. " +
+                    "You don't need to keep this screen open."
+            else
+                "Fix the items marked ✗ — VoiceLock can't listen reliably until they're all done.",
             style = MaterialTheme.typography.bodyLarge
         )
         Spacer(Modifier.height(32.dp))
-        Button(
-            onClick = { activity?.moveTaskToBack(true) },
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            Text("Done — run in background")
+        if (!allGood) {
+            Button(
+                onClick = { nav.navigate("mic_permission") },
+                modifier = Modifier.fillMaxWidth()
+            ) { Text("Finish setup") }
+            Spacer(Modifier.height(8.dp))
+        } else {
+            Button(
+                onClick = { activity?.moveTaskToBack(true) },
+                modifier = Modifier.fillMaxWidth()
+            ) { Text("Done — run in background") }
+            Spacer(Modifier.height(8.dp))
         }
-        Spacer(Modifier.height(8.dp))
         OutlinedButton(
             onClick = { nav.navigate("settings") },
             modifier = Modifier.fillMaxWidth()
@@ -277,6 +322,11 @@ fun HomeScreen(nav: NavController) {
             Text("Settings")
         }
     }
+}
+
+@Composable
+private fun StatusRow(label: String, ok: Boolean) {
+    Text("${if (ok) "✓" else "✗"}  $label", style = MaterialTheme.typography.bodyLarge)
 }
 
 // ---------------------------------------------------------------------------

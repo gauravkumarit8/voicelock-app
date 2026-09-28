@@ -5,6 +5,10 @@ import android.app.admin.DevicePolicyManager
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
+import com.voicelock.app.data.OnboardingStatusStore
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 
 /**
  * Minimal Device Admin receiver. We only ever call lockNow() through this —
@@ -21,9 +25,15 @@ class VoiceLockDeviceAdminReceiver : DeviceAdminReceiver() {
 
     override fun onDisabled(context: Context, intent: Intent) {
         super.onDisabled(context, intent)
-        // Device Admin was revoked (user did this manually in Settings).
-        // The onboarding status store should reflect this so the home
-        // screen re-surfaces the "incomplete setup" state (see PRD §17).
+        // Device Admin was revoked in Settings — reflect it so setup shows as incomplete.
+        val pending = goAsync()
+        CoroutineScope(Dispatchers.IO).launch {
+            try {
+                OnboardingStatusStore(context.applicationContext).setDeviceAdminActive(false)
+            } finally {
+                pending.finish()
+            }
+        }
     }
 
     companion object {

@@ -53,12 +53,7 @@ class VoiceAuthService : Service() {
         try {
             speakerVerificationEngine.loadModel()
         } catch (e: Exception) {
-            android.util.Log.e(
-                TAG,
-                "Speaker verification model failed to load — is speaker_embedding.onnx present " +
-                    "in app/src/main/assets/models/? See README 'Speaker verification model'.",
-                e
-            )
+            android.util.Log.e(TAG, "Speaker verification engine failed to initialize", e)
             stopSelf()
             return
         }

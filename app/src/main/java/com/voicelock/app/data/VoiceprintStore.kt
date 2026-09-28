@@ -53,7 +53,15 @@ class VoiceprintStore @Inject constructor(
         val blended = FloatArray(existing.size) { i ->
             existing[i] * existingWeight + newSample[i] * (1f - existingWeight)
         }
-        saveEmbedding(blended)
+        saveEmbedding(l2Normalize(blended))
+    }
+
+    /** Blending/averaging unit vectors shrinks the norm; cosine similarity via dot product needs unit length. */
+    fun l2Normalize(vec: FloatArray): FloatArray {
+        var norm = 0f
+        for (v in vec) norm += v * v
+        norm = kotlin.math.sqrt(norm).coerceAtLeast(1e-6f)
+        return FloatArray(vec.size) { i -> vec[i] / norm }
     }
 
     fun clear() = prefs.edit().remove(KEY_EMBEDDING).apply()
