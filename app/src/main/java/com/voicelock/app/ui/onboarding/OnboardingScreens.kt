@@ -193,16 +193,29 @@ fun EnrollmentScreen(nav: NavController, viewModel: EnrollmentViewModel = hiltVi
         )
     } else {
         val isProcessing = recordingState == RecordingState.PROCESSING
+        val isFailed = recordingState == RecordingState.FAILED
+        val errorMessage by viewModel.errorMessage.collectAsState()
         OnboardingScaffold(
-            title = if (isProcessing) "Analyzing your voice…" else "All set — ready to save",
-            body = if (isProcessing)
-                "Generating your voiceprint from the 3 recordings."
-            else
-                "Your voiceprint has been created and stored securely on this device.",
-            primaryLabel = if (isProcessing) "Please wait…" else "Test it now",
+            title = when {
+                isProcessing -> "Analyzing your voice…"
+                isFailed -> "Couldn't save your voiceprint"
+                else -> "All set — ready to save"
+            },
+            body = when {
+                isProcessing -> "Generating your voiceprint from the 3 recordings."
+                isFailed -> errorMessage ?: "An unknown error occurred. You can try again."
+                else -> "Your voiceprint has been created and stored securely on this device."
+            },
+            primaryLabel = when {
+                isProcessing -> "Please wait…"
+                isFailed -> "Try again"
+                else -> "Test it now"
+            },
             onPrimary = {
-                if (!isProcessing) {
-                    viewModel.finalizeEnrollment(onDone = { nav.navigate("live_test") })
+                when {
+                    isProcessing -> { /* no-op while processing */ }
+                    isFailed -> viewModel.retryFinalize()
+                    else -> viewModel.finalizeEnrollment(onDone = { nav.navigate("live_test") })
                 }
             }
         )
