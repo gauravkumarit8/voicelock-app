@@ -235,8 +235,8 @@ fun LiveTestScreen(nav: NavController, status: OnboardingStatusViewModel = hiltV
         OnboardingScaffold(
             title = "Let's make sure it works",
             body = "Tap below to lock your screen right now using VoiceLock's Device Admin " +
-                "permission. This confirms the lock mechanism itself works — full voice-triggered " +
-                "locking depends on additional pieces not yet finished (see the app's README).",
+                "permission. This confirms the lock mechanism itself works. Once you're back on " +
+                "the Home screen, VoiceLock listens for your wake phrase any time the screen is on.",
             primaryLabel = "Lock now",
             onPrimary = {
                 val locked = lockManager.lockNow()
