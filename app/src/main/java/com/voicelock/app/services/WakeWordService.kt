@@ -18,6 +18,7 @@ import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
 import androidx.core.content.ContextCompat
+import com.voicelock.app.diagnostics.DiagnosticsLog
 import com.voicelock.app.ml.AudioCapture
 import com.voicelock.app.ml.WakeWordEngine
 import dagger.hilt.android.AndroidEntryPoint
@@ -72,6 +73,8 @@ class WakeWordService : Service() {
 
     override fun onCreate() {
         super.onCreate()
+        DiagnosticsLog.setServiceRunning(true)
+        DiagnosticsLog.log(TAG, "Service created")
         ServiceCompat.startForeground(
             this, NOTIFICATION_ID, buildNotification(),
             if (android.os.Build.VERSION.SDK_INT >= 29) ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE else 0
@@ -90,7 +93,10 @@ class WakeWordService : Service() {
         if (pm.isInteractive) startListening()
     }
 
-    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int = START_STICKY
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        DiagnosticsLog.log(TAG, "onStartCommand (system may be restarting the service)")
+        return START_STICKY
+    }
 
     @Synchronized
     private fun startListening() {
@@ -99,6 +105,7 @@ class WakeWordService : Service() {
             != PackageManager.PERMISSION_GRANTED
         ) {
             Log.e(TAG, "RECORD_AUDIO not granted, stopping service")
+            DiagnosticsLog.log(TAG, "BLOCKED: RECORD_AUDIO permission not granted — stopping")
             stopSelf()
             return
         }
@@ -111,33 +118,45 @@ class WakeWordService : Service() {
                 wakeWordEngine.resetHistory()
                 trailingAudio.clear()
                 Log.i(TAG, "Screen on — listening")
+                DiagnosticsLog.setMicOpen(true)
+                DiagnosticsLog.log(TAG, "Screen ON — mic opened, listening for wake word")
                 AudioCapture.chunkStream(WakeWordEngine.CHUNK_SIZE_SAMPLES)
                     .catch { e -> Log.e(TAG, "Audio capture stream failed", e) }
                     .collect { chunk ->
                         appendToTrailingBuffer(chunk)
                         val confidence = wakeWordEngine.processChunk(chunk) ?: return@collect
+                        if (confidence >= DIAGNOSTIC_LOG_MIN_CONFIDENCE) {
+                            DiagnosticsLog.log(TAG, "wake-word confidence=%.3f".format(confidence))
+                        }
                         if (confidence >= WAKE_WORD_THRESHOLD) {
                             val now = SystemClock.elapsedRealtime()
                             if (now - lastTriggerMs < TRIGGER_COOLDOWN_MS) return@collect
                             lastTriggerMs = now
                             Log.i(TAG, "Wake word detected, confidence=$confidence")
+                            DiagnosticsLog.log(TAG, "WAKE WORD DETECTED confidence=%.3f — checking speaker".format(confidence))
                             triggerVoiceAuth()
                             wakeWordEngine.resetHistory() // avoid re-triggering on the same utterance
                         }
                     }
             } catch (e: SecurityException) {
                 Log.e(TAG, "Missing RECORD_AUDIO permission, stopping", e)
+                DiagnosticsLog.log(TAG, "ERROR: SecurityException — ${e.message}")
                 stopSelf()
             } catch (e: Exception) {
                 if (e is kotlinx.coroutines.CancellationException) throw e
                 Log.e(TAG, "Listening failed", e)
+                DiagnosticsLog.log(TAG, "ERROR: ${e.javaClass.simpleName} — ${e.message}")
             }
         }
     }
 
     @Synchronized
     private fun stopListening() {
-        if (listeningJob?.isActive == true) Log.i(TAG, "Screen off — mic closed")
+        if (listeningJob?.isActive == true) {
+            Log.i(TAG, "Screen off — mic closed")
+            DiagnosticsLog.log(TAG, "Screen OFF — mic closed")
+        }
+        DiagnosticsLog.setMicOpen(false)
         listeningJob?.cancel()
         listeningJob = null
     }
@@ -156,6 +175,9 @@ class WakeWordService : Service() {
     }
 
     override fun onDestroy() {
+        DiagnosticsLog.setServiceRunning(false)
+        DiagnosticsLog.setMicOpen(false)
+        DiagnosticsLog.log(TAG, "Service destroyed")
         runCatching { unregisterReceiver(screenReceiver) }
         serviceScope.cancel()
         if (modelsLoaded) wakeWordEngine.release()
@@ -184,6 +206,7 @@ class WakeWordService : Service() {
         private const val TRIGGER_COOLDOWN_MS = 3000L
 
         private const val WAKE_WORD_THRESHOLD = 0.5f
+        private const val DIAGNOSTIC_LOG_MIN_CONFIDENCE = 0.15f
         private const val TRAILING_BUFFER_SAMPLES = WakeWordEngine.SAMPLE_RATE_HZ * 2
 
         fun start(context: Context) {

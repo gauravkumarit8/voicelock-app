@@ -4,6 +4,8 @@ import android.Manifest
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
@@ -12,6 +14,7 @@ import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.navigation.NavController
 import com.voicelock.app.admin.VoiceLockDeviceAdminReceiver
+import com.voicelock.app.diagnostics.DiagnosticsLog
 import com.voicelock.app.util.BatteryExemption
 import com.voicelock.app.util.OemBatterySettings
 
@@ -374,8 +377,66 @@ fun SettingsScreen(nav: NavController, viewModel: SettingsViewModel = hiltViewMo
         }
 
         Spacer(Modifier.height(8.dp))
+        OutlinedButton(
+            onClick = { nav.navigate("diagnostics") },
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Text("Diagnostics")
+        }
+
+        Spacer(Modifier.height(8.dp))
         TextButton(onClick = { nav.popBackStack() }, modifier = Modifier.fillMaxWidth()) {
             Text("Back")
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Diagnostics — live view of what WakeWordService / VoiceAuthService are doing,
+// so setup problems are visible on-device without adb.
+// ---------------------------------------------------------------------------
+@Composable
+fun DiagnosticsScreen(nav: NavController) {
+    val serviceRunning by DiagnosticsLog.serviceRunning.collectAsState()
+    val micOpen by DiagnosticsLog.micOpen.collectAsState()
+    val lines by DiagnosticsLog.lines.collectAsState()
+
+    Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
+        Text("Diagnostics", style = MaterialTheme.typography.headlineSmall)
+        Spacer(Modifier.height(12.dp))
+        Text("Service: ${if (serviceRunning) "✓ running" else "✗ not running"}")
+        Text("Microphone: ${if (micOpen) "✓ open (screen is on)" else "✗ closed (screen is off, or service isn't running)"}")
+        Spacer(Modifier.height(4.dp))
+        Text(
+            "If the service isn't running, go back to Home — it starts there once " +
+                "mic, admin, and battery are all ✓. If the mic is closed, turn the screen off " +
+                "and back on.",
+            style = MaterialTheme.typography.bodySmall
+        )
+        Spacer(Modifier.height(16.dp))
+        Text("Event log (newest first):", style = MaterialTheme.typography.titleSmall)
+        Spacer(Modifier.height(4.dp))
+        LazyColumn(modifier = Modifier.weight(1f)) {
+            if (lines.isEmpty()) {
+                item { Text("No events yet. Try saying \"Hey Jarvis\" with the screen on.") }
+            }
+            items(lines) { line ->
+                Text(
+                    line,
+                    style = MaterialTheme.typography.bodySmall,
+                    fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace
+                )
+            }
+        }
+        Spacer(Modifier.height(8.dp))
+        Row(modifier = Modifier.fillMaxWidth()) {
+            OutlinedButton(onClick = { DiagnosticsLog.clear() }, modifier = Modifier.weight(1f)) {
+                Text("Clear")
+            }
+            Spacer(Modifier.width(8.dp))
+            OutlinedButton(onClick = { nav.popBackStack() }, modifier = Modifier.weight(1f)) {
+                Text("Back")
+            }
         }
     }
 }

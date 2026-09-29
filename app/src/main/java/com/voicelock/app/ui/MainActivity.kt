@@ -53,6 +53,7 @@ class MainActivity : ComponentActivity() {
                             composable("live_test") { LiveTestScreen(navController) }
                             composable("home") { HomeScreen(navController) }
                             composable("settings") { SettingsScreen(navController) }
+                            composable("diagnostics") { DiagnosticsScreen(navController) }
                         }
                     }
                     // else: brief blank frame while startDestination resolves —

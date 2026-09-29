@@ -4,6 +4,7 @@ import android.app.Service
 import android.content.Intent
 import android.os.IBinder
 import com.voicelock.app.admin.LockManager
+import com.voicelock.app.diagnostics.DiagnosticsLog
 import com.voicelock.app.data.OnboardingStatusStore
 import com.voicelock.app.data.VoiceprintStore
 import com.voicelock.app.ml.SpeakerVerificationEngine
@@ -43,9 +44,11 @@ class VoiceAuthService : Service() {
     }
 
     private suspend fun verifyAndLock(audioSamples: FloatArray) {
+        DiagnosticsLog.log(TAG, "Wake word fired — verifying speaker")
         val enrolled = voiceprintStore.loadEmbedding()
         if (enrolled == null) {
             android.util.Log.w(TAG, "No enrolled voiceprint found — skipping verification")
+            DiagnosticsLog.log(TAG, "BLOCKED: no enrolled voiceprint found")
             stopSelf()
             return
         }
@@ -54,6 +57,7 @@ class VoiceAuthService : Service() {
             speakerVerificationEngine.loadModel()
         } catch (e: Exception) {
             android.util.Log.e(TAG, "Speaker verification engine failed to initialize", e)
+            DiagnosticsLog.log(TAG, "ERROR: engine failed to init — ${e.message}")
             stopSelf()
             return
         }
@@ -62,10 +66,17 @@ class VoiceAuthService : Service() {
         val similarity = speakerVerificationEngine.cosineSimilarity(enrolled, candidate)
         val threshold = onboardingStatusStore.sensitivity.first()
         android.util.Log.i(TAG, "Speaker similarity=$similarity threshold=$threshold")
+        DiagnosticsLog.log(
+            TAG,
+            "similarity=%.3f threshold=%.3f -> %s".format(
+                similarity, threshold, if (similarity >= threshold) "MATCH, locking" else "NO MATCH, not locking"
+            )
+        )
 
         if (similarity >= threshold) {
             val locked = lockManager.lockNow()
             android.util.Log.i(TAG, "lockNow() called, result=$locked")
+            DiagnosticsLog.log(TAG, "lockNow() result=$locked")
             // Silent re-embedding — PRD §15.2, adapts the voiceprint over time.
             voiceprintStore.reinforceEmbedding(candidate)
         }
