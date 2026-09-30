@@ -48,6 +48,7 @@ keystore.properties
 /captures
 .externalNativeBuild
 .cxx
+.patch
 
 # --- Model files are large binaries pulled from openWakeWord's GitHub
 # releases by create_voicelock_project.sh (or manually) rather than

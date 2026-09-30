@@ -4,6 +4,7 @@ import ai.onnxruntime.OnnxTensor
 import ai.onnxruntime.OrtEnvironment
 import ai.onnxruntime.OrtSession
 import android.content.Context
+import android.util.Log
 import java.nio.FloatBuffer
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -22,14 +23,18 @@ import javax.inject.Singleton
  * simplify — they come from how the pretrained embedding/classifier models
  * were trained.
  *
- * CAVEAT: the exact sample-count-per-window arithmetic below (~12400 raw
- * samples -> 76 melspec frames) is reconstructed from openWakeWord's public
- * documentation and community implementations, not verified against a live
- * run of their reference Python pipeline. Before relying on detection
- * accuracy, sanity-check this against openwakeword's own model.py / utils.py
- * (or just run their Python reference on the same audio and compare scores)
- * — a one-frame-off windowing bug wouldn't crash anything, it would just
- * silently produce worse detection than the model is actually capable of.
+ * The raw-sample window size needed to get exactly 76 melspectrogram frames
+ * is CALIBRATED at runtime (see calibrateMelspecWindow), not assumed: the
+ * textbook (N - frame)/hop + 1 formula turned out to be one frame short
+ * against the actual bundled model (2400 elements vs the required 2432), so
+ * rather than hand-guess the model's real internal framing/padding, we
+ * probe it directly on first load and search for the exact match.
+ *
+ * REMAINING CAVEAT: calibration only guarantees the *shape* is right (no more
+ * OrtException crashes). It says nothing about whether the melspectrogram
+ * *content* matches openWakeWord's Python reference bin-for-bin — that would
+ * need comparing outputs against a live run of their pipeline on the same
+ * audio, and is still worth doing before trusting detection accuracy.
  *
  * Bundled in app/src/main/assets/models/ for testing:
  *   - melspectrogram.onnx, embedding_model.onnx  (shared preprocessing — reuse for ANY phrase)
@@ -47,20 +52,73 @@ class WakeWordEngine @Inject constructor(
     private var embeddingSession: OrtSession? = null
     private var classifierSession: OrtSession? = null
 
-    /** Rolling raw-audio window — needs enough samples to produce a 76-frame melspectrogram. */
+    /** Rolling raw-audio window — needs enough samples to produce a MELSPEC_FRAMES-frame melspectrogram. */
     private val rawAudioBuffer = ArrayDeque<Float>()
 
     /** Rolling buffer of embedding frames — classifier needs EMBEDDING_WINDOW consecutive frames. */
     private val embeddingHistory = ArrayDeque<FloatArray>()
+
+    /**
+     * How many raw samples the bundled melspectrogram.onnx actually needs to emit exactly
+     * MELSPEC_FRAMES frames. Determined empirically in loadModels() rather than assumed,
+     * because the model's real internal framing (padding/centering) doesn't necessarily
+     * match the textbook (N - frame)/hop + 1 formula — ours was off by exactly one frame
+     * in testing (75 frames / 2400 elements instead of the required 76 / 2432).
+     */
+    private var melspecWindowSamples: Int = MELSPEC_WINDOW_SAMPLES_INITIAL_GUESS
 
     fun loadModels(
         melspecAsset: String = "models/melspectrogram.onnx",
         embeddingAsset: String = "models/embedding_model.onnx",
         classifierAsset: String = "models/hey_jarvis_v0.1.onnx" // swap for your trained phrase
     ) {
-        melspecSession = env.createSession(context.assets.open(melspecAsset).use { it.readBytes() })
+        val melspec = env.createSession(context.assets.open(melspecAsset).use { it.readBytes() })
+        melspecSession = melspec
         embeddingSession = env.createSession(context.assets.open(embeddingAsset).use { it.readBytes() })
         classifierSession = env.createSession(context.assets.open(classifierAsset).use { it.readBytes() })
+        melspecWindowSamples = calibrateMelspecWindow(melspec)
+    }
+
+    /**
+     * Find the raw-sample window length that makes melspectrogram.onnx emit exactly
+     * MELSPEC_FRAMES * MEL_BINS elements, by actually running it and checking the
+     * output size — starting from the textbook guess and searching outward.
+     */
+    private fun calibrateMelspecWindow(session: OrtSession): Int {
+        val target = MELSPEC_FRAMES * MEL_BINS
+        fun outputSizeFor(samples: Int): Int {
+            val silence = FloatArray(samples)
+            val inputName = session.inputNames.iterator().next()
+            OnnxTensor.createTensor(env, FloatBuffer.wrap(silence), longArrayOf(1, samples.toLong())).use { tensor ->
+                session.run(mapOf(inputName to tensor)).use { result ->
+                    return flattenToFloatArray(result[0].value).size
+                }
+            }
+        }
+
+        // The mismatch we saw (2400 vs 2432) is a small, fixed offset, not a scaling error,
+        // so a narrow linear search around the guess is enough — try short increases first
+        // (a model that pads/centers usually needs a *few* more samples, not fewer).
+        for (delta in 0..CALIBRATION_SEARCH_RANGE) {
+            val candidate = MELSPEC_WINDOW_SAMPLES_INITIAL_GUESS + delta
+            val size = outputSizeFor(candidate)
+            if (size == target) {
+                Log.i(TAG, "Calibrated melspectrogram window: $candidate samples (guess was ${MELSPEC_WINDOW_SAMPLES_INITIAL_GUESS})")
+                return candidate
+            }
+        }
+        for (delta in 1..CALIBRATION_SEARCH_RANGE) {
+            val candidate = MELSPEC_WINDOW_SAMPLES_INITIAL_GUESS - delta
+            if (candidate <= 0) break
+            val size = outputSizeFor(candidate)
+            if (size == target) {
+                Log.i(TAG, "Calibrated melspectrogram window: $candidate samples (guess was ${MELSPEC_WINDOW_SAMPLES_INITIAL_GUESS})")
+                return candidate
+            }
+        }
+
+        Log.e(TAG, "Could not calibrate melspectrogram window within ±$CALIBRATION_SEARCH_RANGE samples of the guess — wake-word detection will likely keep failing")
+        return MELSPEC_WINDOW_SAMPLES_INITIAL_GUESS
     }
 
     fun release() {
@@ -86,8 +144,8 @@ class WakeWordEngine @Inject constructor(
         require(pcm1280.size == CHUNK_SIZE_SAMPLES) { "expected $CHUNK_SIZE_SAMPLES samples per chunk" }
 
         pcm1280.forEach { rawAudioBuffer.addLast(it) }
-        while (rawAudioBuffer.size > MELSPEC_WINDOW_SAMPLES) rawAudioBuffer.removeFirst()
-        if (rawAudioBuffer.size < MELSPEC_WINDOW_SAMPLES) return null // still filling the initial window
+        while (rawAudioBuffer.size > melspecWindowSamples) rawAudioBuffer.removeFirst()
+        if (rawAudioBuffer.size < melspecWindowSamples) return null // still filling the initial window
 
         // Stage 1: rolling raw-audio window -> melspectrogram frames
         val melFrames = runMelspectrogram(melspec, rawAudioBuffer.toFloatArray())
@@ -150,9 +208,13 @@ class WakeWordEngine @Inject constructor(
     }
 
     companion object {
+        private const val TAG = "WakeWordEngine"
         const val CHUNK_SIZE_SAMPLES = 1280        // 80ms @ 16kHz, openWakeWord's native chunk size
         const val SAMPLE_RATE_HZ = 16000
-        private const val MELSPEC_WINDOW_SAMPLES = 12400 // raw samples needed to produce 76 melspec frames
+        // Textbook (N - frame)/hop + 1 estimate for 76 frames; the real bundled model needed a
+        // slightly different value (see calibrateMelspecWindow) — this is only the search's starting point.
+        private const val MELSPEC_WINDOW_SAMPLES_INITIAL_GUESS = 12400
+        private const val CALIBRATION_SEARCH_RANGE = 800
         private const val MELSPEC_FRAMES = 76
         private const val MEL_BINS = 32
         private const val EMBEDDING_WINDOW = 16    // classifier looks at 16 consecutive embedding frames
