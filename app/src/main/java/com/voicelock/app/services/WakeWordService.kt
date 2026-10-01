@@ -58,6 +58,7 @@ class WakeWordService : Service() {
     private var listeningJob: Job? = null
     private var modelsLoaded = false
     private var lastTriggerMs = 0L
+    private var chunkCounter = 0
 
     /** Rolling ~2s of raw audio, handed to VoiceAuthService when the wake word fires. */
     private val trailingAudio = ArrayDeque<Float>()
@@ -117,6 +118,7 @@ class WakeWordService : Service() {
                 }
                 wakeWordEngine.resetHistory()
                 trailingAudio.clear()
+                chunkCounter = 0
                 Log.i(TAG, "Screen on — listening")
                 DiagnosticsLog.setMicOpen(true)
                 DiagnosticsLog.log(TAG, "Screen ON — mic opened, listening for wake word")
@@ -125,8 +127,14 @@ class WakeWordService : Service() {
                     .collect { chunk ->
                         appendToTrailingBuffer(chunk)
                         val confidence = wakeWordEngine.processChunk(chunk) ?: return@collect
+                        chunkCounter++
                         if (confidence >= DIAGNOSTIC_LOG_MIN_CONFIDENCE) {
                             DiagnosticsLog.log(TAG, "wake-word confidence=%.3f".format(confidence))
+                        } else if (chunkCounter % PERIODIC_LOG_EVERY_N_CHUNKS == 0) {
+                            // Chunks run every ~80ms, so every 12th is roughly once a second —
+                            // proves the pipeline is alive and shows real numbers even when
+                            // they're too low to clear the "interesting" threshold above.
+                            DiagnosticsLog.log(TAG, "(quiet) wake-word confidence=%.4f".format(confidence))
                         }
                         if (confidence >= WAKE_WORD_THRESHOLD) {
                             val now = SystemClock.elapsedRealtime()
@@ -207,6 +215,7 @@ class WakeWordService : Service() {
 
         private const val WAKE_WORD_THRESHOLD = 0.5f
         private const val DIAGNOSTIC_LOG_MIN_CONFIDENCE = 0.15f
+        private const val PERIODIC_LOG_EVERY_N_CHUNKS = 12 // ~once/second at 80ms chunks
         private const val TRAILING_BUFFER_SAMPLES = WakeWordEngine.SAMPLE_RATE_HZ * 2
 
         fun start(context: Context) {

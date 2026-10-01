@@ -143,7 +143,13 @@ class WakeWordEngine @Inject constructor(
 
         require(pcm1280.size == CHUNK_SIZE_SAMPLES) { "expected $CHUNK_SIZE_SAMPLES samples per chunk" }
 
-        pcm1280.forEach { rawAudioBuffer.addLast(it) }
+        // AudioCapture normalizes to [-1, 1] (correct general convention, and what
+        // SpeakerVerificationEngine wants). openWakeWord's melspectrogram.onnx was
+        // trained on raw int16-magnitude audio (just the PCM value cast to float32,
+        // never divided by 32768) — feeding it [-1,1] values makes every chunk look
+        // like near-total silence to the model, regardless of what's actually said.
+        // Rescale only for this pipeline.
+        pcm1280.forEach { rawAudioBuffer.addLast(it * INT16_MAGNITUDE) }
         while (rawAudioBuffer.size > melspecWindowSamples) rawAudioBuffer.removeFirst()
         if (rawAudioBuffer.size < melspecWindowSamples) return null // still filling the initial window
 
@@ -217,6 +223,7 @@ class WakeWordEngine @Inject constructor(
         private const val CALIBRATION_SEARCH_RANGE = 800
         private const val MELSPEC_FRAMES = 76
         private const val MEL_BINS = 32
+        private const val INT16_MAGNITUDE = 32768f
         private const val EMBEDDING_WINDOW = 16    // classifier looks at 16 consecutive embedding frames
         private const val EMBEDDING_DIM = 96
     }
