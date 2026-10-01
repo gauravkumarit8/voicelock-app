@@ -1,0 +1,20 @@
+diff --git a/app/src/main/java/com/voicelock/app/services/WakeWordService.kt b/app/src/main/java/com/voicelock/app/services/WakeWordService.kt
+index 1e2a154..24f1c8b 100644
+--- a/app/src/main/java/com/voicelock/app/services/WakeWordService.kt
++++ b/app/src/main/java/com/voicelock/app/services/WakeWordService.kt
+@@ -213,8 +213,13 @@ class WakeWordService : Service() {
+         private const val NOTIFICATION_ID = 1001
+         private const val TRIGGER_COOLDOWN_MS = 3000L
+ 
+-        private const val WAKE_WORD_THRESHOLD = 0.5f
+-        private const val DIAGNOSTIC_LOG_MIN_CONFIDENCE = 0.15f
++        // 0.5 was the textbook openWakeWord default, but real-device testing showed actual
++        // "Hey Jarvis" peaks landing around 0.18-0.19 against a ~0.00-0.13 noise floor —
++        // 0.5 never triggered. Lowered to sit just above the observed noise ceiling. This is
++        // an empirical value for THIS pipeline (still DIY-calibrated melspec, not verified
++        // bin-for-bin against openWakeWord's reference) and may need further tuning per device.
++        private const val WAKE_WORD_THRESHOLD = 0.16f
++        private const val DIAGNOSTIC_LOG_MIN_CONFIDENCE = 0.08f
+         private const val PERIODIC_LOG_EVERY_N_CHUNKS = 12 // ~once/second at 80ms chunks
+         private const val TRAILING_BUFFER_SAMPLES = WakeWordEngine.SAMPLE_RATE_HZ * 2
+ 
