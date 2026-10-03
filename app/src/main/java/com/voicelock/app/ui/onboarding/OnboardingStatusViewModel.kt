@@ -13,6 +13,8 @@ class OnboardingStatusViewModel @Inject constructor(
     private val store: OnboardingStatusStore
 ) : ViewModel() {
     val isFullySetUp = store.isFullySetUp
+    val userPaused = store.userPaused
+    fun setUserPaused(v: Boolean) { viewModelScope.launch { store.setUserPaused(v) } }
     fun setMicGranted(v: Boolean) { viewModelScope.launch { store.setMicGranted(v) } }
     fun setDeviceAdminActive(v: Boolean) { viewModelScope.launch { store.setDeviceAdminActive(v) } }
     fun setBatteryExempt(v: Boolean) { viewModelScope.launch { store.setBatteryExempt(v) } }

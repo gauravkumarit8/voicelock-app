@@ -1,0 +1,94 @@
+diff --git a/app/src/main/java/com/voicelock/app/data/OnboardingStatusStore.kt b/app/src/main/java/com/voicelock/app/data/OnboardingStatusStore.kt
+index a35162a..0351b8b 100644
+--- a/app/src/main/java/com/voicelock/app/data/OnboardingStatusStore.kt
++++ b/app/src/main/java/com/voicelock/app/data/OnboardingStatusStore.kt
+@@ -29,6 +29,7 @@ class OnboardingStatusStore @Inject constructor(
+         val VOICE_ENROLLED = booleanPreferencesKey("voice_enrolled")
+         val LIVE_TEST_PASSED = booleanPreferencesKey("live_test_passed")
+         val SENSITIVITY = floatPreferencesKey("sensitivity_threshold")
++        val USER_PAUSED = booleanPreferencesKey("user_paused")
+     }
+ 
+     val isFullySetUp: Flow<Boolean> = context.dataStore.data.map { prefs ->
+@@ -55,4 +56,8 @@ class OnboardingStatusStore @Inject constructor(
+     suspend fun setVoiceEnrolled(v: Boolean) = context.dataStore.edit { it[Keys.VOICE_ENROLLED] = v }
+     suspend fun setLiveTestPassed(v: Boolean) = context.dataStore.edit { it[Keys.LIVE_TEST_PASSED] = v }
+     suspend fun setSensitivity(v: Float) = context.dataStore.edit { it[Keys.SENSITIVITY] = v }
++
++    /** User-requested pause, independent of the mic/admin/battery gates — see Home screen. */
++    val userPaused: Flow<Boolean> = context.dataStore.data.map { it[Keys.USER_PAUSED] ?: false }
++    suspend fun setUserPaused(v: Boolean) = context.dataStore.edit { it[Keys.USER_PAUSED] = v }
+ }
+diff --git a/app/src/main/java/com/voicelock/app/ui/onboarding/OnboardingScreens.kt b/app/src/main/java/com/voicelock/app/ui/onboarding/OnboardingScreens.kt
+index 4c89b9b..ab3f857 100644
+--- a/app/src/main/java/com/voicelock/app/ui/onboarding/OnboardingScreens.kt
++++ b/app/src/main/java/com/voicelock/app/ui/onboarding/OnboardingScreens.kt
+@@ -271,6 +271,8 @@ fun HomeScreen(nav: NavController, status: OnboardingStatusViewModel = hiltViewM
+     var adminOk by remember { mutableStateOf(false) }
+     var batteryOk by remember { mutableStateOf(false) }
+ 
++    val userPaused by status.userPaused.collectAsState(initial = false)
++
+     val refreshAndMaybeStart: () -> Unit = {
+         micOk = androidx.core.content.ContextCompat.checkSelfPermission(
+             context, Manifest.permission.RECORD_AUDIO
+@@ -281,7 +283,8 @@ fun HomeScreen(nav: NavController, status: OnboardingStatusViewModel = hiltViewM
+         status.setDeviceAdminActive(adminOk)
+         status.setBatteryExempt(batteryOk)
+         // App is in the foreground here, so starting the mic service is allowed.
+-        if (micOk && adminOk && batteryOk) {
++        // Respect an explicit user pause — don't auto-restart over it.
++        if (micOk && adminOk && batteryOk && !userPaused) {
+             com.voicelock.app.services.WakeWordService.start(context)
+         }
+     }
+@@ -326,11 +329,12 @@ fun HomeScreen(nav: NavController, status: OnboardingStatusViewModel = hiltViewM
+         StatusRow("Battery optimization exemption", batteryOk)
+         Spacer(Modifier.height(16.dp))
+         Text(
+-            if (allGood)
+-                "Say \"Hey Jarvis\" any time the screen is on to lock your phone. " +
++            when {
++                !allGood -> "Fix the items marked ✗ — VoiceLock can't listen reliably until they're all done."
++                userPaused -> "Listening is paused. VoiceLock won't react to your voice until you resume it."
++                else -> "Say \"Hey Jarvis\" any time the screen is on to lock your phone. " +
+                     "You don't need to keep this screen open."
+-            else
+-                "Fix the items marked ✗ — VoiceLock can't listen reliably until they're all done.",
++            },
+             style = MaterialTheme.typography.bodyLarge
+         )
+         Spacer(Modifier.height(32.dp))
+@@ -341,6 +345,19 @@ fun HomeScreen(nav: NavController, status: OnboardingStatusViewModel = hiltViewM
+             ) { Text("Finish setup") }
+             Spacer(Modifier.height(8.dp))
+         } else {
++            Button(
++                onClick = {
++                    if (userPaused) {
++                        status.setUserPaused(false)
++                        com.voicelock.app.services.WakeWordService.start(context)
++                    } else {
++                        status.setUserPaused(true)
++                        com.voicelock.app.services.WakeWordService.stop(context)
++                    }
++                },
++                modifier = Modifier.fillMaxWidth()
++            ) { Text(if (userPaused) "Resume listening" else "Pause listening") }
++            Spacer(Modifier.height(8.dp))
+             Button(
+                 onClick = { activity?.moveTaskToBack(true) },
+                 modifier = Modifier.fillMaxWidth()
+diff --git a/app/src/main/java/com/voicelock/app/ui/onboarding/OnboardingStatusViewModel.kt b/app/src/main/java/com/voicelock/app/ui/onboarding/OnboardingStatusViewModel.kt
+index e69f7ee..2b14ce5 100644
+--- a/app/src/main/java/com/voicelock/app/ui/onboarding/OnboardingStatusViewModel.kt
++++ b/app/src/main/java/com/voicelock/app/ui/onboarding/OnboardingStatusViewModel.kt
+@@ -13,6 +13,8 @@ class OnboardingStatusViewModel @Inject constructor(
+     private val store: OnboardingStatusStore
+ ) : ViewModel() {
+     val isFullySetUp = store.isFullySetUp
++    val userPaused = store.userPaused
++    fun setUserPaused(v: Boolean) { viewModelScope.launch { store.setUserPaused(v) } }
+     fun setMicGranted(v: Boolean) { viewModelScope.launch { store.setMicGranted(v) } }
+     fun setDeviceAdminActive(v: Boolean) { viewModelScope.launch { store.setDeviceAdminActive(v) } }
+     fun setBatteryExempt(v: Boolean) { viewModelScope.launch { store.setBatteryExempt(v) } }

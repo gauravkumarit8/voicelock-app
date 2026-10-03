@@ -29,6 +29,7 @@ class OnboardingStatusStore @Inject constructor(
         val VOICE_ENROLLED = booleanPreferencesKey("voice_enrolled")
         val LIVE_TEST_PASSED = booleanPreferencesKey("live_test_passed")
         val SENSITIVITY = floatPreferencesKey("sensitivity_threshold")
+        val USER_PAUSED = booleanPreferencesKey("user_paused")
     }
 
     val isFullySetUp: Flow<Boolean> = context.dataStore.data.map { prefs ->
@@ -55,4 +56,8 @@ class OnboardingStatusStore @Inject constructor(
     suspend fun setVoiceEnrolled(v: Boolean) = context.dataStore.edit { it[Keys.VOICE_ENROLLED] = v }
     suspend fun setLiveTestPassed(v: Boolean) = context.dataStore.edit { it[Keys.LIVE_TEST_PASSED] = v }
     suspend fun setSensitivity(v: Float) = context.dataStore.edit { it[Keys.SENSITIVITY] = v }
+
+    /** User-requested pause, independent of the mic/admin/battery gates — see Home screen. */
+    val userPaused: Flow<Boolean> = context.dataStore.data.map { it[Keys.USER_PAUSED] ?: false }
+    suspend fun setUserPaused(v: Boolean) = context.dataStore.edit { it[Keys.USER_PAUSED] = v }
 }

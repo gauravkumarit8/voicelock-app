@@ -271,6 +271,8 @@ fun HomeScreen(nav: NavController, status: OnboardingStatusViewModel = hiltViewM
     var adminOk by remember { mutableStateOf(false) }
     var batteryOk by remember { mutableStateOf(false) }
 
+    val userPaused by status.userPaused.collectAsState(initial = false)
+
     val refreshAndMaybeStart: () -> Unit = {
         micOk = androidx.core.content.ContextCompat.checkSelfPermission(
             context, Manifest.permission.RECORD_AUDIO
@@ -281,7 +283,8 @@ fun HomeScreen(nav: NavController, status: OnboardingStatusViewModel = hiltViewM
         status.setDeviceAdminActive(adminOk)
         status.setBatteryExempt(batteryOk)
         // App is in the foreground here, so starting the mic service is allowed.
-        if (micOk && adminOk && batteryOk) {
+        // Respect an explicit user pause — don't auto-restart over it.
+        if (micOk && adminOk && batteryOk && !userPaused) {
             com.voicelock.app.services.WakeWordService.start(context)
         }
     }
@@ -326,11 +329,12 @@ fun HomeScreen(nav: NavController, status: OnboardingStatusViewModel = hiltViewM
         StatusRow("Battery optimization exemption", batteryOk)
         Spacer(Modifier.height(16.dp))
         Text(
-            if (allGood)
-                "Say \"Hey Jarvis\" any time the screen is on to lock your phone. " +
+            when {
+                !allGood -> "Fix the items marked ✗ — VoiceLock can't listen reliably until they're all done."
+                userPaused -> "Listening is paused. VoiceLock won't react to your voice until you resume it."
+                else -> "Say \"Hey Jarvis\" any time the screen is on to lock your phone. " +
                     "You don't need to keep this screen open."
-            else
-                "Fix the items marked ✗ — VoiceLock can't listen reliably until they're all done.",
+            },
             style = MaterialTheme.typography.bodyLarge
         )
         Spacer(Modifier.height(32.dp))
@@ -341,6 +345,19 @@ fun HomeScreen(nav: NavController, status: OnboardingStatusViewModel = hiltViewM
             ) { Text("Finish setup") }
             Spacer(Modifier.height(8.dp))
         } else {
+            Button(
+                onClick = {
+                    if (userPaused) {
+                        status.setUserPaused(false)
+                        com.voicelock.app.services.WakeWordService.start(context)
+                    } else {
+                        status.setUserPaused(true)
+                        com.voicelock.app.services.WakeWordService.stop(context)
+                    }
+                },
+                modifier = Modifier.fillMaxWidth()
+            ) { Text(if (userPaused) "Resume listening" else "Pause listening") }
+            Spacer(Modifier.height(8.dp))
             Button(
                 onClick = { activity?.moveTaskToBack(true) },
                 modifier = Modifier.fillMaxWidth()
